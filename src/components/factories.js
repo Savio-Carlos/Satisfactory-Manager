@@ -1,4 +1,4 @@
-import { getState, setState, showToast, showModal, hideModal, fmt, fmtRate, itemIcon, buildingIcon } from '../modules/state.js';
+import { getState, setState, showToast, showModal, hideModal, fmt, fmtRate, itemIcon, buildingIcon, renderProgressBar } from '../modules/state.js';
 import { api } from '../modules/api.js';
 import { initFlowchart } from './flowchart.js';
 
@@ -234,6 +234,23 @@ function renderFactoryDetail() {
                 </div>
             </div>
         </div>`;
+        
+        // Built in save toggle
+        const { saveData } = getState();
+        if (saveData) {
+            tabContent = `
+            <div style="background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:12px 16px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center">
+                <div>
+                    <div style="font-weight:600;font-size:14px;color:var(--text-primary)">Already built in save</div>
+                    <div style="font-size:12px;color:var(--text-secondary)">This factory is built in your current save file. Turn this on so it doesn't double-count on your global dashboard.</div>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="factory-built-toggle" ${factory.countedInSave ? 'checked' : ''}>
+                    <span class="slider"></span>
+                </label>
+            </div>
+            ` + tabContent;
+        }
     } 
     else if (activeTab === 'materials') {
         const itemSummary = {};
@@ -294,6 +311,7 @@ function renderFactoryDetail() {
                     <td><div class="item-cell">${itemIcon(itemId, gameData)}<span>${item?.name || itemId}</span></div></td>
                     <td class="rate-cell rate-surplus">${impact.produced > 0 ? `${fmtRate(impact.produced, itemId, gameData)} <span style="font-size:10px;color:var(--text-muted)">(${fmt(prodPct, 1)}% of global)</span>` : '-'}</td>
                     <td class="rate-cell rate-deficit">${impact.consumed > 0 ? `${fmtRate(impact.consumed, itemId, gameData)} <span style="font-size:10px;color:var(--text-muted)">(${fmt(consPct, 1)}% of global)</span>` : '-'}</td>
+                    <td>${renderProgressBar(global.produced, global.consumed, itemId)}</td>
                 </tr>`;
             }
         }
@@ -301,8 +319,8 @@ function renderFactoryDetail() {
         tabContent = `<div class="card">
             <div class="card-title" style="margin-bottom:14px">Impact on Global Grid</div>
             <div class="table-container" style="max-height:60vh;overflow-y:auto">
-                <table><thead><tr><th>Item</th><th>Produced Here</th><th>Consumed Here</th></tr></thead>
-                <tbody>${rows || '<tr><td colspan="3" style="text-align:center;padding:20px;color:var(--text-muted)">No impact</td></tr>'}</tbody></table>
+                <table><thead><tr><th style="min-width:200px">Item</th><th>Produced Here</th><th>Consumed Here</th><th>Usage (Global)</th></tr></thead>
+                <tbody>${rows || '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--text-muted)">No impact</td></tr>'}</tbody></table>
             </div>
         </div>`;
     }
@@ -414,6 +432,19 @@ function initFactoryDetail() {
 
     if (activeTab === 'overview') {
         const { gameData, unlockedAlternates } = getState();
+        
+        document.getElementById('factory-built-toggle')?.addEventListener('change', async (e) => {
+            const { factories } = getState();
+            const factory = factories.find(f => f.id === activeFactoryId);
+            if (!factory) return;
+            factory.countedInSave = e.target.checked;
+            try {
+                await api.updateFactory(factory.id, factory);
+                const updatedFactories = await api.getFactories();
+                setState('factories', updatedFactories);
+                showToast('Factory updated', 'success');
+            } catch (err) { showToast(err.message, 'error'); }
+        });
         
         document.getElementById('add-item-select')?.addEventListener('change', (e) => {
             const itemId = e.target.value;

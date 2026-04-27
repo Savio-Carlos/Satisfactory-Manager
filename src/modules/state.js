@@ -32,6 +32,59 @@ export function showToast(message, type = 'info') {
 }
 
 // Modal
+export const RAW_LIMITS = {
+    'Desc_OreBauxite_C': 12300,
+    'Desc_OreGold_C': 15000,
+    'Desc_Coal_C': 42300,
+    'Desc_OreCopper_C': 36900,
+    'Desc_LiquidOil_C': 12600,
+    'Desc_OreIron_C': 92100,
+    'Desc_Stone_C': 69900,
+    'Desc_NitrogenGas_C': 12000,
+    'Desc_RawQuartz_C': 13500,
+    'Desc_SAM_C': 10200,
+    'Desc_Sulfur_C': 10800,
+    'Desc_OreUranium_C': 2100,
+    'Desc_Water_C': Infinity
+};
+
+export function renderProgressBar(produced, consumed, itemId) {
+    const isWater = itemId === 'Desc_Water_C';
+    if (isWater) {
+        return `<div style="display:flex;align-items:center;gap:8px;min-width:100px">
+            <div style="flex:1;height:8px;background:var(--bg-input);border-radius:4px;overflow:hidden">
+                <div style="height:100%;width:100%;background:var(--accent-blue)"></div>
+            </div>
+            <span style="font-size:12px;color:var(--text-secondary);width:40px;text-align:right">∞</span>
+        </div>`;
+    }
+    
+    const limit = RAW_LIMITS[itemId];
+    const max = limit !== undefined ? limit : produced;
+    
+    if (max <= 0) {
+        if (consumed > 0) {
+            return `<div style="display:flex;align-items:center;gap:8px;min-width:100px">
+                <div style="flex:1;height:8px;background:var(--bg-input);border-radius:4px;overflow:hidden">
+                    <div style="height:100%;width:100%;background:var(--color-deficit)"></div>
+                </div>
+                <span style="font-size:12px;color:var(--color-deficit);width:40px;text-align:right">100%</span>
+            </div>`;
+        }
+        return `<span style="font-size:12px;color:var(--text-muted)">-</span>`;
+    }
+    
+    const pct = Math.min(100, Math.max(0, (consumed / max) * 100));
+    const color = pct > 99 ? 'var(--color-deficit)' : (pct > 80 ? 'var(--color-balanced)' : 'var(--color-surplus)');
+    
+    return `<div style="display:flex;align-items:center;gap:8px;min-width:100px">
+        <div style="flex:1;height:8px;background:var(--bg-input);border-radius:4px;overflow:hidden">
+            <div style="height:100%;width:${pct}%;background:${color};transition:width 0.3s ease"></div>
+        </div>
+        <span style="font-size:12px;color:${color};width:40px;text-align:right">${Math.round(pct)}%</span>
+    </div>`;
+}
+
 export function showModal(html) {
     document.getElementById('modal-container').innerHTML = html;
     document.getElementById('modal-overlay').classList.remove('hidden');

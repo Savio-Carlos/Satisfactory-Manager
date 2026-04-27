@@ -1,4 +1,4 @@
-import { getState, fmt, fmtRate, itemIcon } from '../modules/state.js';
+import { getState, fmt, fmtRate, itemIcon, renderProgressBar } from '../modules/state.js';
 
 export function renderDashboard() {
     const { gameData, factories, saveData } = getState();
@@ -76,7 +76,8 @@ export function renderDashboard() {
                 <td class="rate-cell rate-surplus">${item.produced > 0 ? fmtRate(item.produced, item.itemId, gameData) : '-'}</td>
                 <td class="rate-cell rate-deficit">${item.consumed > 0 ? fmtRate(item.consumed, item.itemId, gameData) : '-'}</td>
                 <td class="rate-cell ${netClass}">${netPrefix}${fmtRate(item.net, item.itemId, gameData)}</td>
-                <td><span class="badge ${badgeClass}">${badgeText}</span></td>
+                <td>${renderProgressBar(item.produced, item.consumed, item.itemId)}</td>
+                <td style="display:none"><span class="badge ${badgeClass}">${badgeText}</span></td>
             </tr>`;
         }
     }
@@ -132,7 +133,7 @@ export function renderDashboard() {
                             <th>Production</th>
                             <th>Consumption</th>
                             <th>Net Balance</th>
-                            <th>Status</th>
+                            <th>Usage</th>
                         </tr>
                     </thead>
                     <tbody id="balance-tbody">${tableRows}</tbody>

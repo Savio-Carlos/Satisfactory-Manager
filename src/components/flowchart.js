@@ -13,18 +13,18 @@ const RAW_H = 48;
 const H_GAP = 120;
 const V_GAP = 32;
 const COLORS = {
-    recipeBg: '#f2914e',
-    recipeBorder: '#c2410c',
-    recipeText: '#0f172a',
-    rawBg: '#1e293b',
-    rawBorder: '#475569',
-    rawText: '#94a3b8',
-    outputBg: '#047857',
-    outputBorder: '#10b981',
+    recipeBg: '#DF691A',
+    recipeBorder: '#b35415',
+    recipeText: '#fff',
+    rawBg: '#4E5D6C',
+    rawBorder: '#39444f',
+    rawText: '#e2e8f0',
+    outputBg: '#4E5D6C',
+    outputBorder: '#39444f',
     outputText: '#fff',
-    edge: '#1e293b',
+    edge: '#141d26',
     edgeText: '#0f172a',
-    canvasBg: '#5f6e85'
+    canvasBg: '#2B3E50'
 };
 
 let nodes = [];
@@ -301,6 +301,13 @@ function draw(ctx, canvas, dpr, gameData) {
     ctx.translate(pan.x, pan.y);
     ctx.scale(zoom, zoom);
 
+        // Group backwards edges to calculate proper bottom offsets
+        const backwardsEdges = edges.filter(e => {
+            const f = nodes.find(n => n.id === e.from);
+            const t = nodes.find(n => n.id === e.to);
+            return f && t && (f.x >= t.x);
+        });
+
     // Edges
     for (const edge of edges) {
         const fromNode = nodes.find(n => n.id === edge.from);
@@ -313,23 +320,28 @@ function draw(ctx, canvas, dpr, gameData) {
         const y1 = fromNode.y + fromH / 2;
         const x2 = toNode.x;
         const y2 = toNode.y + toH / 2;
-        const cpx = (x1 + x2) / 2;
 
         ctx.beginPath();
         ctx.moveTo(x1, y1);
         
         let midX, midY;
         
-        // Cycle routing (backwards edge)
+        // Cycle routing (backwards edge) - Orthogonal
         if (x1 >= x2) {
-            const bottomY = Math.max(y1, y2) + 80;
-            ctx.bezierCurveTo(x1 + 60, y1, x1 + 60, bottomY, (x1 + x2) / 2, bottomY);
-            ctx.bezierCurveTo(x2 - 60, bottomY, x2 - 60, y2, x2, y2);
+            const edgeIndex = backwardsEdges.indexOf(edge);
+            const bottomY = Math.max(y1, y2) + 60 + (edgeIndex * 24); // Offset each edge so they don't overlap
+            
+            ctx.lineTo(x1 + 40, y1);
+            ctx.lineTo(x1 + 40, bottomY);
+            ctx.lineTo(x2 - 40, bottomY);
+            ctx.lineTo(x2 - 40, y2);
+            ctx.lineTo(x2, y2);
+            
             midX = (x1 + x2) / 2;
             midY = bottomY;
         } else {
-            // Forward edge
-            ctx.bezierCurveTo(cpx, y1, cpx, y2, x2, y2);
+            // Forward edge - Direct straight line
+            ctx.lineTo(x2, y2);
             midX = (x1 + x2) / 2;
             midY = (y1 + y2) / 2;
         }
@@ -400,12 +412,12 @@ function draw(ctx, canvas, dpr, gameData) {
 
         if (node.label2) {
             ctx.font = '12px Inter, sans-serif';
-            ctx.fillStyle = isRecipe ? 'rgba(15,23,42,0.85)' : COLORS.rawText;
+            ctx.fillStyle = isRecipe ? 'rgba(255,255,255,0.85)' : COLORS.rawText;
             ctx.fillText(truncate(node.label2, 22), textX, node.y + nh / 2 + 6);
         }
         if (node.label3) {
             ctx.font = '10px JetBrains Mono, monospace';
-            ctx.fillStyle = isRecipe ? 'rgba(15,23,42,0.7)' : 'rgba(255,255,255,0.5)';
+            ctx.fillStyle = isRecipe ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.5)';
             ctx.fillText(node.label3, textX, node.y + nh / 2 + 20);
         }
     }

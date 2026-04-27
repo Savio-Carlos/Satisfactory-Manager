@@ -36,25 +36,25 @@ export function renderPlanner() {
     }
 
     return `
-    <div class="fade-in" style="height:calc(100vh - 100px);display:flex;flex-direction:column">
-        <div class="page-header" style="margin-bottom:16px;flex:none">
+    <div class="fade-in" style="display:flex;flex-direction:column;gap:16px;padding-bottom:100px">
+        <div class="page-header" style="margin-bottom:0">
             <div>
                 <h1>Production Planner</h1>
                 <p>Design new factories and calculate resource requirements</p>
             </div>
             <div style="display:flex;gap:12px;align-items:center">
                  <button class="btn btn-secondary" id="add-plan-to-factory" ${!hasResult ? 'disabled' : ''}>Add to Factory</button>
-                 <button class="btn btn-primary" id="planner-calc" style="padding:0 24px">Calculate</button>
+                 <button class="btn btn-primary" id="planner-calc" style="padding:12px 36px;font-size:16px;font-weight:700;height:auto">Calculate</button>
             </div>
         </div>
         
-        <div class="planner-tabs" style="flex:none">
+        <div class="planner-tabs">
             <button class="planner-tab ${tab === 'production' ? 'active' : ''}" data-tab="production">🏭 Production</button>
             <button class="planner-tab ${tab === 'recipes' ? 'active' : ''}" data-tab="recipes">📜 Recipes</button>
             <button class="planner-tab ${tab === 'items' ? 'active' : ''}" data-tab="items">📦 Items</button>
         </div>
         
-        <div id="planner-tab-content" style="flex:1;display:flex;flex-direction:column;min-height:0">
+        <div id="planner-tab-content">
             ${resultContent}
         </div>
     </div>`;
@@ -110,22 +110,22 @@ function renderProductionTab(gameData, hasResult) {
     }
 
     return `
-    <div style="flex:none;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:16px;margin-bottom:16px">
+    <div style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:16px;margin-bottom:16px">
         <div style="margin-bottom:16px;font-size:14px;font-weight:600;color:var(--text-secondary)">Select items you want to produce</div>
         <div id="planner-target-list">
             ${targetRows}
         </div>
         <div style="display:flex;gap:12px;margin-top:8px">
             <div class="input-group" style="margin:0;flex:2">
-                <select id="planner-new-item">
-                    <option value="">Search or select item...</option>
+                <input type="text" id="planner-new-item-search" placeholder="Search or select item..." list="planner-items-datalist" style="width:100%" />
+                <datalist id="planner-items-datalist">
                     ${itemOptions}
-                </select>
+                </datalist>
             </div>
             <button class="btn btn-ghost" id="planner-add-target" style="flex:1;border:1px dashed var(--accent-green);color:var(--accent-green)">+ Add product</button>
         </div>
     </div>
-    <div style="flex:1;min-height:300px;position:relative;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);overflow:hidden">
+    <div style="height:850px;position:relative;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);overflow:hidden">
         ${vizContent}
     </div>`;
 }
@@ -240,10 +240,23 @@ function renderItemsTab(result, gameData, hasResult) {
 export function initPlanner() {
     // Add target button
     document.getElementById('planner-add-target')?.addEventListener('click', () => {
-        const itemSelect = document.getElementById('planner-new-item');
-        if (!itemSelect) return;
-        const itemId = itemSelect.value;
-        if (!itemId) { showToast('Select an item', 'error'); return; }
+        const itemInput = document.getElementById('planner-new-item-search');
+        if (!itemInput) return;
+        const val = itemInput.value;
+        if (!val) { showToast('Select an item', 'error'); return; }
+        
+        const { gameData } = getState();
+        const producibleItems = Object.entries(gameData.itemRecipeMap)
+            .map(([itemId]) => ({ id: itemId, name: gameData.items[itemId]?.name || itemId }));
+        
+        let itemId = val;
+        // if user typed name, try to match it
+        if (!gameData.items[val]) {
+            const match = producibleItems.find(i => i.name.toLowerCase() === val.toLowerCase());
+            if (match) itemId = match.id;
+            else { showToast('Item not found', 'error'); return; }
+        }
+
         // Check if already added
         if (plannerState.targets.find(t => t.itemId === itemId)) {
             showToast('Item already added', 'error'); return;
