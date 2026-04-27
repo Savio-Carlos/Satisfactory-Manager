@@ -1,3 +1,4 @@
+import { parseSaveFileLocal } from '../modules/saveParser.js';
 import { getState, setState, showToast, fmt, fmtRate, itemIcon } from '../modules/state.js';
 import { api } from '../modules/api.js';
 
@@ -106,6 +107,7 @@ export function initSaveFile() {
     input.addEventListener('change', () => { if (input.files.length) handleSaveUpload(input.files[0]); });
 }
 
+
 async function handleSaveUpload(file) {
     if (!file.name.endsWith('.sav')) {
         showToast('Please upload a .sav file', 'error');
@@ -115,21 +117,29 @@ async function handleSaveUpload(file) {
     document.getElementById('upload-zone').style.display = 'none';
     document.getElementById('upload-progress').style.display = 'block';
 
-    try {
-        const result = await api.parseSaveFile(file);
-        setState('saveData', result);
+    // Allow UI to update before blocking parser
+    setTimeout(async () => {
+        try {
+            const { gameData } = getState();
+            // Parse locally! Bypass DO 30s timeout and memory limits
+            const result = await parseSaveFileLocal(file, gameData);
+            
+            setState('saveData', result);
 
-        // Update unlocked alternates
-        if (result.unlockedAlternates) {
-            setState('unlockedAlternates', result.unlockedAlternates);
+            // Update unlocked alternates
+            if (result.unlockedAlternates) {
+                setState('unlockedAlternates', result.unlockedAlternates);
+                // Also update on backend to persist if we ever switch back
+                try { api.updateUnlockedAlternates(result.unlockedAlternates); } catch (e) {}
+            }
+
+            showToast(`Parsed ${result.totalBuildings} buildings, ${result.unlockedAlternates?.length || 0} alternate recipes!`, 'success');
+            document.getElementById('page-content').innerHTML = renderSaveFile();
+            initSaveFile();
+        } catch (err) {
+            showToast('Failed to parse: ' + err.message, 'error');
+            document.getElementById('upload-zone').style.display = '';
+            document.getElementById('upload-progress').style.display = 'none';
         }
-
-        showToast(`Parsed ${result.totalBuildings} buildings, ${result.unlockedAlternates?.length || 0} alternate recipes!`, 'success');
-        document.getElementById('page-content').innerHTML = renderSaveFile();
-        initSaveFile();
-    } catch (err) {
-        showToast('Failed to parse: ' + err.message, 'error');
-        document.getElementById('upload-zone').style.display = '';
-        document.getElementById('upload-progress').style.display = 'none';
-    }
+    }, 100);
 }
