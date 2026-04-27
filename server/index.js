@@ -368,7 +368,7 @@ if (process.env.NODE_ENV === 'production' || process.env.DIGITALOCEAN === 'true'
     });
 }
 
-app.listen(PORT, () => {
-    console.log(`\n🏭 Satisfactory Manager API running at http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n🏭 Satisfactory Manager API running at http://0.0.0.0:${PORT}`);
     console.log(`   Game data: ${Object.keys(gameData.items).length} items, ${Object.keys(gameData.recipes).length} recipes\n`);
 });
