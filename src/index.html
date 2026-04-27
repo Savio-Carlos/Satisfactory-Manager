@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Satisfactory Manager - Track your factory production, plan new factories, and manage resources">
+    <meta name="referrer" content="no-referrer">
+    <title>Satisfactory Manager</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/css/index.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Sidebar Navigation -->
+        <nav id="sidebar" class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <div class="logo-icon">⚙</div>
+                    <span class="logo-text">Satisfactory<br><strong>Manager</strong></span>
+                </div>
+            </div>
+            <ul class="nav-links">
+                <li><a href="#" data-page="dashboard" class="nav-link active" id="nav-dashboard">
+                    <span class="nav-icon">📊</span>
+                    <span>Dashboard</span>
+                </a></li>
+                <li><a href="#" data-page="factories" class="nav-link" id="nav-factories">
+                    <span class="nav-icon">🏭</span>
+                    <span>Factories</span>
+                </a></li>
+                <li><a href="#" data-page="planner" class="nav-link" id="nav-planner">
+                    <span class="nav-icon">🔧</span>
+                    <span>Planner</span>
+                </a></li>
+                <li><a href="#" data-page="savefile" class="nav-link" id="nav-savefile">
+                    <span class="nav-icon">💾</span>
+                    <span>Save File</span>
+                </a></li>
+                <li><a href="#" data-page="settings" class="nav-link" id="nav-settings">
+                    <span class="nav-icon">⚙️</span>
+                    <span>Settings</span>
+                </a></li>
+            </ul>
+            <div class="sidebar-footer">
+                <div class="version-tag">v1.0 • Stable</div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main id="main-content" class="main-content">
+            <div id="page-content"></div>
+        </main>
+    </div>
+
+    <!-- Modal Overlay -->
+    <div id="modal-overlay" class="modal-overlay hidden">
+        <div id="modal-container" class="modal-container"></div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script type="module" src="/main.js"></script>
+</body>
+</html>

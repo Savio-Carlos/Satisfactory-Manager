@@ -1,0 +1,27 @@
+{
+  "name": "satisfactory-manager",
+  "version": "1.0.0",
+  "description": "Satisfactory resource tracker and factory planner",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "concurrently \"node server/index.js\" \"npx vite --open\"",
+    "dev:server": "node server/index.js",
+    "dev:client": "npx vite --open",
+    "build": "vite build",
+    "process-data": "node processGameData.cjs"
+  },
+  "keywords": ["satisfactory", "factory", "planner"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@etothepii/satisfactory-file-parser": "^3.3.2",
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.2"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "vite": "^6.3.3"
+  }
+}

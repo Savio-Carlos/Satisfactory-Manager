@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+
+# Ignore user-specific data, but keep the directory and game data
+server/data/userData.json
+
+# OS specific
+.DS_Store
+Thumbs.db
