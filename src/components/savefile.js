@@ -57,6 +57,37 @@ export function renderSaveFile() {
                 </table>
             </div>
         </div>
+        
+        <div class="card" style="margin-top:24px">
+            <div class="card-header" style="cursor:pointer" id="toggle-raw-data">
+                <div>
+                    <div class="card-title">Raw Save Data Explorer</div>
+                    <div class="card-subtitle">Detailed parse information (click to expand)</div>
+                </div>
+                <div style="font-size:24px;color:var(--text-muted)">▾</div>
+            </div>
+            <div id="raw-data-content" style="display:none;padding-top:16px;border-top:1px solid var(--border-color)">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">
+                    <div>
+                        <div style="font-size:14px;font-weight:600;margin-bottom:12px;color:var(--text-secondary)">Building Counts</div>
+                        <div class="table-container" style="max-height:400px;overflow-y:auto">
+                            <table>
+                                <thead><tr><th>Building Type</th><th>Count</th></tr></thead>
+                                <tbody>
+                                    ${getBuildingCounts(saveData.buildings, gameData)}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div>
+                        <div style="font-size:14px;font-weight:600;margin-bottom:12px;color:var(--text-secondary)">Factory Map (Production Buildings)</div>
+                        <div style="background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-md);height:400px;position:relative;overflow:hidden">
+                            ${renderMap(saveData.buildings)}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     ` : '';
 
     return `
@@ -86,9 +117,53 @@ export function renderSaveFile() {
 }
 
 function formatPlayTime(seconds) {
+    if (!seconds) return 'Unknown';
     const h = Math.floor(seconds / 3600);
     const m = Math.floor((seconds % 3600) / 60);
     return `${h}h ${m}m`;
+}
+
+function getBuildingCounts(buildings, gameData) {
+    if (!buildings || buildings.length === 0) return '<tr><td colspan="2" class="text-muted">No buildings found</td></tr>';
+    const counts = {};
+    for (const bld of buildings) {
+        counts[bld.buildingId] = (counts[bld.buildingId] || 0) + 1;
+    }
+    return Object.entries(counts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([id, count]) => {
+            const bld = gameData.buildings[id];
+            return `<tr>
+                <td><div class="item-cell">${itemIcon(id, gameData, 16, 'item-icon-sm')}<span>${bld?.name || id}</span></div></td>
+                <td style="font-family:var(--font-mono);font-weight:600">${count}</td>
+            </tr>`;
+        }).join('');
+}
+
+function renderMap(buildings) {
+    if (!buildings || buildings.length === 0) return '<div class="empty-state">No location data</div>';
+    
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    const validBlds = buildings.filter(b => b.position);
+    if (validBlds.length === 0) return '<div class="empty-state">No location data</div>';
+    
+    for (const b of validBlds) {
+        minX = Math.min(minX, b.position.x);
+        maxX = Math.max(maxX, b.position.x);
+        minY = Math.min(minY, b.position.y);
+        maxY = Math.max(maxY, b.position.y);
+    }
+    
+    const rangeX = Math.max(maxX - minX, 1000);
+    const rangeY = Math.max(maxY - minY, 1000);
+    
+    const dots = validBlds.map(b => {
+        const px = ((b.position.x - minX) / rangeX) * 90 + 5;
+        const py = ((b.position.y - minY) / rangeY) * 90 + 5;
+        return `<div style="position:absolute;left:${px}%;top:${py}%;width:4px;height:4px;background:var(--accent-orange);border-radius:50%;opacity:0.6" title="${b.buildingName}"></div>`;
+    }).join('');
+    
+    return `<div style="width:100%;height:100%;position:relative;background:#0c1220">${dots}</div>`;
 }
 
 export function initSaveFile() {
@@ -105,6 +180,21 @@ export function initSaveFile() {
         if (e.dataTransfer.files.length) handleSaveUpload(e.dataTransfer.files[0]);
     });
     input.addEventListener('change', () => { if (input.files.length) handleSaveUpload(input.files[0]); });
+
+    const toggleBtn = document.getElementById('toggle-raw-data');
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', () => {
+            const content = document.getElementById('raw-data-content');
+            const arrow = toggleBtn.querySelector('div:last-child');
+            if (content.style.display === 'none') {
+                content.style.display = 'block';
+                arrow.textContent = '▴';
+            } else {
+                content.style.display = 'none';
+                arrow.textContent = '▾';
+            }
+        });
+    }
 }
 
 

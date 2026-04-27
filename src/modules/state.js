@@ -86,9 +86,19 @@ export function getImageUrl(imageUrl) {
 /**
  * Render an item icon img tag
  */
-export function itemIcon(itemId, gameData, size = 32) {
+export function itemIcon(itemId, gameData, size = 32, cls = 'item-icon') {
     const item = gameData?.items?.[itemId];
-    if (!item?.image) return `<div class="item-icon" style="width:${size}px;height:${size}px"></div>`;
+    if (!item?.image) return `<div class="${cls}" style="width:${size}px;height:${size}px"></div>`;
     const url = getImageUrl(item.image);
-    return `<img src="${url}" class="item-icon" style="width:${size}px;height:${size}px" alt="${item.name || ''}" loading="lazy">`;
+    return `<img src="${url}" class="${cls}" style="width:${size}px;height:${size}px" alt="${item.name || ''}" loading="lazy">`;
+}
+
+/**
+ * Render a building icon img tag
+ */
+export function buildingIcon(buildingId, gameData, size = 28) {
+    const bld = gameData?.buildings?.[buildingId];
+    if (!bld?.image) return `<div class="item-icon" style="width:${size}px;height:${size}px"></div>`;
+    const url = getImageUrl(bld.image);
+    return `<img src="${url}" class="item-icon" style="width:${size}px;height:${size}px" alt="${bld.name || ''}" loading="lazy">`;
 }
