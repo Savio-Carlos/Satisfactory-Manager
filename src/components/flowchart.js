@@ -13,18 +13,18 @@ const RAW_H = 48;
 const H_GAP = 120;
 const V_GAP = 32;
 const COLORS = {
-    recipeBg: '#c2410c',
-    recipeBorder: '#ea580c',
-    recipeText: '#fff',
+    recipeBg: '#f2914e',
+    recipeBorder: '#c2410c',
+    recipeText: '#0f172a',
     rawBg: '#1e293b',
     rawBorder: '#475569',
     rawText: '#94a3b8',
     outputBg: '#047857',
     outputBorder: '#10b981',
     outputText: '#fff',
-    edge: '#64748b',
-    edgeText: '#94a3b8',
-    canvasBg: '#0c1220'
+    edge: '#1e293b',
+    edgeText: '#0f172a',
+    canvasBg: '#5f6e85'
 };
 
 let nodes = [];
@@ -317,7 +317,23 @@ function draw(ctx, canvas, dpr, gameData) {
 
         ctx.beginPath();
         ctx.moveTo(x1, y1);
-        ctx.bezierCurveTo(cpx, y1, cpx, y2, x2, y2);
+        
+        let midX, midY;
+        
+        // Cycle routing (backwards edge)
+        if (x1 >= x2) {
+            const bottomY = Math.max(y1, y2) + 80;
+            ctx.bezierCurveTo(x1 + 60, y1, x1 + 60, bottomY, (x1 + x2) / 2, bottomY);
+            ctx.bezierCurveTo(x2 - 60, bottomY, x2 - 60, y2, x2, y2);
+            midX = (x1 + x2) / 2;
+            midY = bottomY;
+        } else {
+            // Forward edge
+            ctx.bezierCurveTo(cpx, y1, cpx, y2, x2, y2);
+            midX = (x1 + x2) / 2;
+            midY = (y1 + y2) / 2;
+        }
+
         ctx.strokeStyle = COLORS.edge;
         ctx.lineWidth = 1.5;
         ctx.stroke();
@@ -332,19 +348,16 @@ function draw(ctx, canvas, dpr, gameData) {
         ctx.fill();
 
         // Edge label with item icon
-        const midX = (x1 + x2) / 2;
-        const midY = (y1 + y2) / 2;
-
         // Draw item icon on edge
         if (edge.itemImg && imageCache.has(edge.itemImg)) {
             const img = imageCache.get(edge.itemImg);
-            ctx.drawImage(img, midX - 10, midY - 22, 20, 20);
+            ctx.drawImage(img, midX - 10, midY - 24, 20, 20);
         }
 
-        ctx.font = '10px Inter, sans-serif';
+        ctx.font = '600 12px Inter, sans-serif';
         ctx.fillStyle = COLORS.edgeText;
         ctx.textAlign = 'center';
-        ctx.fillText(edge.label, midX, midY + 10);
+        ctx.fillText(edge.label, midX, midY + 12);
     }
 
     // Nodes
@@ -382,18 +395,18 @@ function draw(ctx, canvas, dpr, gameData) {
         const align = iconUrl ? 'left' : 'center';
         ctx.fillStyle = textColor;
         ctx.textAlign = align;
-        ctx.font = 'bold 11px Inter, sans-serif';
-        ctx.fillText(truncate(node.label1, 20), textX, node.y + nh / 2 - (node.label3 ? 8 : (node.label2 ? 4 : 2)));
+        ctx.font = 'bold 13px Inter, sans-serif';
+        ctx.fillText(truncate(node.label1, 18), textX, node.y + nh / 2 - (node.label3 ? 10 : (node.label2 ? 6 : 2)));
 
         if (node.label2) {
-            ctx.font = '10px Inter, sans-serif';
-            ctx.fillStyle = isRecipe ? 'rgba(255,255,255,0.75)' : COLORS.rawText;
+            ctx.font = '12px Inter, sans-serif';
+            ctx.fillStyle = isRecipe ? 'rgba(15,23,42,0.85)' : COLORS.rawText;
             ctx.fillText(truncate(node.label2, 22), textX, node.y + nh / 2 + 6);
         }
         if (node.label3) {
-            ctx.font = '9px JetBrains Mono, monospace';
-            ctx.fillStyle = 'rgba(255,255,255,0.5)';
-            ctx.fillText(node.label3, textX, node.y + nh / 2 + 18);
+            ctx.font = '10px JetBrains Mono, monospace';
+            ctx.fillStyle = isRecipe ? 'rgba(15,23,42,0.7)' : 'rgba(255,255,255,0.5)';
+            ctx.fillText(node.label3, textX, node.y + nh / 2 + 20);
         }
     }
     ctx.restore();

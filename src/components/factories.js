@@ -515,27 +515,34 @@ function updateProductionPreview(targetItemId, gameData) {
     document.getElementById('production-preview').innerHTML = preview;
 }
 
-function showAddFactoryModal() {
+export function showAddFactoryModal(initialName = '', initialDescription = '', prefilledBuildings = null) {
     const { saveData } = getState();
     const hasSave = !!saveData;
 
     showModal(`
-        <div class="modal-title">New Factory</div>
+        <div class="modal-title">${prefilledBuildings ? 'Create Factory from Plan' : 'New Factory'}</div>
         <div class="input-group">
             <label>Factory Name</label>
-            <input type="text" id="factory-name" placeholder="e.g. Battery Factory" />
+            <input type="text" id="factory-name" placeholder="e.g. Battery Factory" value="${initialName}" />
         </div>
         <div class="input-group">
             <label>Description (optional)</label>
-            <textarea id="factory-desc" rows="2" placeholder="What does this factory produce?"></textarea>
+            <textarea id="factory-desc" rows="2" placeholder="What does this factory produce?">${initialDescription}</textarea>
         </div>
         ${hasSave ? `
         <div style="padding:12px;background:var(--bg-input);border-radius:var(--radius-sm);border:1px solid var(--border-color);margin-bottom:16px">
-            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:var(--text-secondary)">
-                <input type="checkbox" id="factory-counted-in-save" style="width:auto" />
-                <span><strong style="color:var(--text-primary)">Already built in save</strong> — This factory's production is already counted in the save file data. Checking this prevents double-counting on the dashboard.</span>
+            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;font-size:13px;color:var(--text-secondary)">
+                <input type="checkbox" id="factory-counted-in-save" style="width:auto;margin-top:2px" />
+                <span><strong style="color:var(--text-primary);display:block;margin-bottom:4px">Already built in save</strong>This factory's production is already counted in the save file data. Checking this prevents double-counting its input/output on the global grid impact.</span>
             </label>
-        </div>` : ''}
+        </div>` : `
+        <div style="padding:12px;background:var(--bg-input);border-radius:var(--radius-sm);border:1px solid var(--border-color);margin-bottom:16px">
+            <div style="font-size:13px;color:var(--text-secondary)">
+                <strong style="color:var(--text-primary);display:block;margin-bottom:4px">Grid Impact</strong>
+                Because no save file is loaded, this factory will automatically contribute to your theoretical global grid impact.
+            </div>
+        </div>
+        `}
         <div class="modal-actions">
             <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
             <button class="btn btn-primary" id="modal-create">Create Factory</button>
@@ -546,13 +553,29 @@ function showAddFactoryModal() {
         const name = document.getElementById('factory-name').value.trim();
         if (!name) { showToast('Please enter a name', 'error'); return; }
         const countedInSave = document.getElementById('factory-counted-in-save')?.checked || false;
+        
+        const payload = { 
+            name, 
+            description: document.getElementById('factory-desc').value.trim(), 
+            countedInSave 
+        };
+        
+        if (prefilledBuildings) {
+            payload.buildings = prefilledBuildings;
+        }
+        
         try {
-            await api.createFactory({ name, description: document.getElementById('factory-desc').value.trim(), countedInSave });
+            await api.createFactory(payload);
             const factories = await api.getFactories();
             setState('factories', factories);
             hideModal();
             showToast('Factory created!', 'success');
-            rerender();
+            
+            // If we're not currently on the factories page, this rerender might be redundant,
+            // but it's safe to call. The caller might want to navigate to factories.
+            if (document.getElementById('add-factory-btn')) {
+                rerender();
+            }
         } catch (err) { showToast(err.message, 'error'); }
     });
 }
