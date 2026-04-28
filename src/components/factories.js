@@ -272,19 +272,37 @@ function renderFactoryDetail() {
             const item = gameData.items[itemId];
             const net = summary.produced - summary.consumed;
             const netClass = net > 0.01 ? 'rate-surplus' : net < -0.01 ? 'rate-deficit' : 'rate-balanced';
+            
+            let sourcedToggle = '';
+            let sourcedBadge = '';
+            if (net < -0.01) {
+                const isSourced = factory.sourcedInputs && factory.sourcedInputs.includes(itemId);
+                if (isSourced) {
+                    sourcedBadge = `<span style="font-size:10px;padding:2px 6px;background:var(--accent-blue-dim);color:var(--accent-blue);border-radius:4px;margin-left:8px;white-space:nowrap">Globally Sourced</span>`;
+                }
+                sourcedToggle = `
+                <div style="display:flex;justify-content:center">
+                    <label class="toggle-switch" style="transform:scale(0.8)">
+                        <input type="checkbox" class="source-toggle" data-item="${itemId}" ${isSourced ? 'checked' : ''}>
+                        <span class="slider"></span>
+                    </label>
+                </div>`;
+            }
+            
             rows += `<tr>
-                <td><div class="item-cell">${itemIcon(itemId, gameData)}<span>${item?.name || itemId}</span></div></td>
+                <td><div class="item-cell">${itemIcon(itemId, gameData)}<span>${item?.name || itemId}</span>${sourcedBadge}</div></td>
                 <td class="rate-cell rate-surplus">${summary.produced > 0 ? fmtRate(summary.produced, itemId, gameData) : '-'}</td>
                 <td class="rate-cell rate-deficit">${summary.consumed > 0 ? fmtRate(summary.consumed, itemId, gameData) : '-'}</td>
                 <td class="rate-cell ${netClass}">${fmtRate(net, itemId, gameData)}</td>
+                <td>${sourcedToggle}</td>
             </tr>`;
         }
 
         tabContent = `<div class="card">
             <div class="card-title" style="margin-bottom:14px">Material I/O</div>
             <div class="table-container" style="max-height:60vh;overflow-y:auto">
-                <table><thead><tr><th>Item</th><th>Produced</th><th>Consumed</th><th>Net</th></tr></thead>
-                <tbody>${rows || '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--text-muted)">No materials used</td></tr>'}</tbody></table>
+                <table><thead><tr><th>Item</th><th>Produced</th><th>Consumed</th><th>Net</th><th style="text-align:center">Globally Sourced</th></tr></thead>
+                <tbody>${rows || '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">No materials used</td></tr>'}</tbody></table>
             </div>
         </div>`;
     }
@@ -425,6 +443,30 @@ function initFactoryDetail() {
         });
     });
     
+    if (activeTab === 'materials') {
+        document.querySelectorAll('.source-toggle').forEach(toggle => {
+            toggle.addEventListener('change', async (e) => {
+                const { factories } = getState();
+                const factory = factories.find(f => f.id === activeFactoryId);
+                if (!factory) return;
+                
+                if (!factory.sourcedInputs) factory.sourcedInputs = [];
+                const itemId = e.target.dataset.item;
+                if (e.target.checked) {
+                    if (!factory.sourcedInputs.includes(itemId)) factory.sourcedInputs.push(itemId);
+                } else {
+                    factory.sourcedInputs = factory.sourcedInputs.filter(id => id !== itemId);
+                }
+                
+                try {
+                    await api.updateFactory(factory.id, factory);
+                    const updatedFactories = await api.getFactories();
+                    setState('factories', updatedFactories);
+                } catch (err) { showToast(err.message, 'error'); }
+            });
+        });
+    }
+
     if (activeTab === 'diagram' && factoryResultCache) {
         const { gameData } = getState();
         setTimeout(() => initFlowchart(factoryResultCache, gameData), 50);

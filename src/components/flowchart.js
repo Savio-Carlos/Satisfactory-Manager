@@ -6,12 +6,12 @@ import { fmt, fmtRate, getImageUrl } from '../modules/state.js';
  * item icons on edges, zoom + pan + drag.
  */
 
-const NODE_W = 220;
-const NODE_H = 72;
+const NODE_W = 240;
+const NODE_H = 68;
 const RAW_W = 160;
 const RAW_H = 48;
-const H_GAP = 120;
-const V_GAP = 32;
+const H_GAP = 180;
+const V_GAP = 48;
 const COLORS = {
     recipeBg: '#DF691A',
     recipeBorder: '#b35415',
@@ -22,8 +22,8 @@ const COLORS = {
     outputBg: '#4E5D6C',
     outputBorder: '#39444f',
     outputText: '#fff',
-    edge: '#141d26',
-    edgeText: '#0f172a',
+    edge: '#94a3b8',
+    edgeText: '#e2e8f0',
     canvasBg: '#2B3E50'
 };
 
@@ -31,11 +31,10 @@ let nodes = [];
 let edges = [];
 let dragNode = null;
 let dragOffset = { x: 0, y: 0 };
-let pan = { x: 60, y: 60 };
-let isPanning = false;
-let panStart = { x: 0, y: 0 };
+let pan = { x: 50, y: 50 };
 let zoom = 1;
 let imageCache = new Map();
+let hoveredNode = null;
 
 export function renderFlowchart() { return ''; }
 
@@ -43,90 +42,112 @@ export function initFlowchart(result, gameData) {
     const canvas = document.getElementById('flowchart-canvas');
     if (!canvas) return;
 
+    let isDragging = false;
+    let lastMouse = { x: 0, y: 0 };
+    let tooltipDiv = document.getElementById('flowchart-tooltip');
+    if (!tooltipDiv) {
+        tooltipDiv = document.createElement('div');
+        tooltipDiv.id = 'flowchart-tooltip';
+        tooltipDiv.className = 'flowchart-tooltip';
+        document.body.appendChild(tooltipDiv);
+    }
+    tooltipDiv.style.display = 'none';
+
     // Reset state
     imageCache = new Map();
-    pan = { x: 60, y: 60 };
+    pan = { x: 50, y: 50 };
     zoom = 1;
 
     const dpr = window.devicePixelRatio || 1;
     const resize = () => {
         canvas.width = canvas.offsetWidth * dpr;
         canvas.height = canvas.offsetHeight * dpr;
+        draw(ctx, canvas, dpr, gameData);
     };
+    window.addEventListener('resize', resize);
     resize();
     const ctx = canvas.getContext('2d');
 
     buildGraph(result, gameData);
     layoutGraph();
 
-    // Preload item/building images
-    const imageUrls = new Set();
-    for (const step of result.steps) {
-        const bld = step.buildingId ? gameData.buildings[step.buildingId] : null;
-        if (bld?.image) imageUrls.add(getImageUrl(bld.image));
-        for (const inp of step.inputs) {
-            const item = gameData.items[inp.itemId];
-            if (item?.image) imageUrls.add(getImageUrl(item.image));
-        }
-        for (const out of step.outputs) {
-            const item = gameData.items[out.itemId];
-            if (item?.image) imageUrls.add(getImageUrl(item.image));
-        }
-    }
-    for (const [itemId] of Object.entries(result.rawResources)) {
-        const item = gameData.items[itemId];
-        if (item?.image) imageUrls.add(getImageUrl(item.image));
-    }
-
-    let loaded = 0;
-    const total = imageUrls.size;
-    for (const url of imageUrls) {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => { imageCache.set(url, img); loaded++; if (loaded >= total) draw(ctx, canvas, dpr, gameData); };
-        img.onerror = () => { loaded++; if (loaded >= total) draw(ctx, canvas, dpr, gameData); };
-        img.src = url;
-    }
-    if (total === 0) draw(ctx, canvas, dpr, gameData);
-
     // Mouse events
-    canvas.onmousedown = (e) => {
+    canvas.addEventListener('mousedown', (e) => {
         const rect = canvas.getBoundingClientRect();
-        const mx = (e.clientX - rect.left - pan.x) / zoom;
-        const my = (e.clientY - rect.top - pan.y) / zoom;
-        dragNode = null;
-        for (const node of nodes) {
-            const w = node.type === 'recipe' || node.type === 'output' ? NODE_W : RAW_W;
-            const h = node.type === 'recipe' || node.type === 'output' ? NODE_H : RAW_H;
-            if (mx >= node.x && mx <= node.x + w && my >= node.y && my <= node.y + h) {
-                dragNode = node;
-                dragOffset = { x: mx - node.x, y: my - node.y };
-                canvas.style.cursor = 'grabbing';
-                return;
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        isDragging = true;
+        lastMouse = { x: mx, y: my };
+        canvas.style.cursor = 'grabbing';
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+
+        if (isDragging) {
+            pan.x += mx - lastMouse.x;
+            pan.y += my - lastMouse.y;
+            draw(ctx, canvas, dpr, gameData);
+        } else {
+            const graphX = (mx - pan.x) / zoom;
+            const graphY = (my - pan.y) / zoom;
+            let found = null;
+            for (const node of nodes) {
+                const nw = node.type === 'recipe' || node.type === 'output' ? NODE_W : RAW_W;
+                const nh = node.type === 'recipe' || node.type === 'output' ? NODE_H : RAW_H;
+                if (graphX >= node.x && graphX <= node.x + nw && graphY >= node.y && graphY <= node.y + nh) {
+                    found = node;
+                    break;
+                }
+            }
+            if (found !== hoveredNode) {
+                hoveredNode = found;
+                if (hoveredNode) {
+                    showTooltip(hoveredNode, e.clientX, e.clientY);
+                } else {
+                    tooltipDiv.style.display = 'none';
+                }
+                draw(ctx, canvas, dpr, gameData);
+            } else if (hoveredNode) {
+                tooltipDiv.style.left = (e.clientX + 15) + 'px';
+                tooltipDiv.style.top = (e.clientY + 15) + 'px';
             }
         }
-        isPanning = true;
-        panStart = { x: e.clientX - pan.x, y: e.clientY - pan.y };
-        canvas.style.cursor = 'grabbing';
-    };
-    canvas.onmousemove = (e) => {
-        const rect = canvas.getBoundingClientRect();
-        if (dragNode) {
-            const mx = (e.clientX - rect.left - pan.x) / zoom;
-            const my = (e.clientY - rect.top - pan.y) / zoom;
-            dragNode.x = mx - dragOffset.x;
-            dragNode.y = my - dragOffset.y;
-            draw(ctx, canvas, dpr, gameData);
-        } else if (isPanning) {
-            pan.x = e.clientX - panStart.x;
-            pan.y = e.clientY - panStart.y;
-            draw(ctx, canvas, dpr, gameData);
-        }
-    };
-    canvas.onmouseup = () => { dragNode = null; isPanning = false; canvas.style.cursor = 'grab'; };
-    canvas.onmouseleave = () => { dragNode = null; isPanning = false; canvas.style.cursor = 'grab'; };
+        lastMouse = { x: mx, y: my };
+    });
 
-    // Zoom
+    canvas.addEventListener('mouseup', () => { isDragging = false; canvas.style.cursor = 'grab'; });
+    canvas.addEventListener('mouseleave', () => { 
+        isDragging = false; 
+        if (hoveredNode) { hoveredNode = null; tooltipDiv.style.display = 'none'; draw(ctx, canvas, dpr, gameData); }
+        canvas.style.cursor = 'grab'; 
+    });
+
+    function showTooltip(node, x, y) {
+        if (!node.tooltipData) return;
+        const d = node.tooltipData;
+        let html = `<strong>${node.label1}</strong><br/>`;
+        if (d.machines) {
+            html += `<div style="font-size:12px;margin-bottom:8px">${d.machineCountRaw}x ${d.buildingName} at ${d.clockSpeed}% clock speed<br/>Needed power: ${d.power} MW</div>`;
+        }
+        if (d.inputs && d.inputs.length > 0) {
+            html += `<div style="margin-bottom:4px">`;
+            for (const inp of d.inputs) html += `<div><strong>IN:</strong> ${inp.rate} / min - ${inp.name}</div>`;
+            html += `</div>`;
+        }
+        if (d.outputs && d.outputs.length > 0) {
+            html += `<div>`;
+            for (const out of d.outputs) html += `<div><strong>OUT:</strong> ${out.rate} / min - ${out.name}</div>`;
+            html += `</div>`;
+        }
+        tooltipDiv.innerHTML = html;
+        tooltipDiv.style.display = 'block';
+        tooltipDiv.style.left = (x + 15) + 'px';
+        tooltipDiv.style.top = (y + 15) + 'px';
+    }
+
     canvas.onwheel = (e) => {
         e.preventDefault();
         const rect = canvas.getBoundingClientRect();
@@ -145,18 +166,26 @@ function buildGraph(result, gameData) {
     nodes = [];
     edges = [];
     const stepNodes = new Map();
-    const rawNodes = new Map();
 
     for (const step of result.steps) {
         const building = step.buildingId ? gameData.buildings[step.buildingId] : null;
-        const bldImg = building?.image ? getImageUrl(building.image) : null;
+        const tooltipData = {
+            machines: true,
+            machineCountRaw: step.machineCountRaw.toFixed(3),
+            buildingName: building?.name || 'Machine',
+            clockSpeed: step.clockSpeed,
+            power: (step.power || 0).toFixed(3),
+            inputs: step.inputs.map(i => ({ name: gameData.items[i.itemId]?.name || i.itemId, rate: (i.ratePerMachine * step.machineCountRaw).toFixed(3) })),
+            outputs: step.outputs.map(o => ({ name: gameData.items[o.itemId]?.name || o.itemId, rate: (o.ratePerMachine * step.machineCountRaw).toFixed(3) }))
+        };
         const node = {
             id: step.recipeId + '__' + step.targetItemId,
             type: 'recipe',
             label1: step.recipeName,
-            label2: `${step.machineCount}× ${building?.name || 'Machine'}`,
-            label3: `${fmt(step.clockSpeed)}%`,
-            buildingImg: bldImg,
+            label2: `${Math.ceil(step.machineCountRaw)}× ${building?.name || 'Machine'}`,
+            label3: `${step.clockSpeed}%`,
+            buildingImg: building?.image ? getImageUrl(building.image) : null,
+            tooltipData: tooltipData,
             x: 0, y: 0
         };
         nodes.push(node);
@@ -165,85 +194,27 @@ function buildGraph(result, gameData) {
 
     for (const [itemId, rate] of Object.entries(result.rawResources)) {
         const item = gameData.items[itemId];
-        const node = {
+        nodes.push({
             id: 'raw__' + itemId,
             type: 'raw',
             label1: item?.name || itemId,
             label2: fmtRate(rate, itemId, gameData),
             itemImg: item?.image ? getImageUrl(item.image) : null,
+            tooltipData: { machines: false, outputs: [{ name: item?.name || itemId, rate: rate.toFixed(3) }] },
             x: 0, y: 0
-        };
-        nodes.push(node);
-        rawNodes.set(itemId, node);
+        });
     }
 
-    const targetName = gameData.items[result.targetItemId]?.name || result.targetItemId;
     const targetItem = gameData.items[result.targetItemId];
-    const outputNode = {
+    nodes.push({
         id: 'output__' + result.targetItemId,
         type: 'output',
-        label1: targetName,
+        label1: targetItem?.name || result.targetItemId,
         label2: fmtRate(result.targetRate, result.targetItemId, gameData),
         itemImg: targetItem?.image ? getImageUrl(targetItem.image) : null,
+        tooltipData: { machines: false, inputs: [{ name: targetItem?.name || result.targetItemId, rate: result.targetRate.toFixed(3) }] },
         x: 0, y: 0
-    };
-    nodes.push(outputNode);
-
-    for (const step of result.steps) {
-        const stepNode = stepNodes.get(step.recipeId + '__' + step.targetItemId);
-        if (!stepNode) continue;
-        for (const inp of step.inputs) {
-            const sourceRaw = rawNodes.get(inp.itemId);
-            const sourceStep = findStepProducing(inp.itemId, result.steps, stepNodes);
-            const source = sourceStep || sourceRaw;
-            if (source) {
-                const rate = inp.ratePerMachine * step.machineCountRaw;
-                const item = gameData.items[inp.itemId];
-                edges.push({
-                    from: source.id, to: stepNode.id,
-                    label: fmtRate(rate, inp.itemId, gameData),
-                    itemName: item?.name || inp.itemId,
-                    itemImg: item?.image ? getImageUrl(item.image) : null
-                });
-            }
-        }
-        if (step.targetItemId === result.targetItemId) {
-            edges.push({
-                from: stepNode.id, to: outputNode.id,
-                label: fmtRate(result.targetRate, result.targetItemId, gameData),
-                itemName: targetName,
-                itemImg: targetItem?.image ? getImageUrl(targetItem.image) : null
-            });
-        }
-        for (const out of step.outputs) {
-            if (out.itemId === result.targetItemId) continue;
-            for (const cs of result.steps) {
-                if (cs === step) continue;
-                if (cs.inputs.find(i => i.itemId === out.itemId)) {
-                    const cn = stepNodes.get(cs.recipeId + '__' + cs.targetItemId);
-                    if (cn && !edges.find(e => e.from === stepNode.id && e.to === cn.id && e.itemName === (gameData.items[out.itemId]?.name || out.itemId))) {
-                        const rate = out.ratePerMachine * step.machineCountRaw;
-                        const item = gameData.items[out.itemId];
-                        edges.push({
-                            from: stepNode.id, to: cn.id,
-                            label: fmtRate(rate, out.itemId, gameData),
-                            itemName: item?.name || out.itemId,
-                            itemImg: item?.image ? getImageUrl(item.image) : null
-                        });
-                    }
-                }
-            }
-        }
-    }
-}
-
-function findStepProducing(itemId, steps, stepNodes) {
-    for (const step of steps) {
-        if (step.outputs.some(o => o.itemId === itemId)) {
-            return stepNodes.get(step.recipeId + '__' + step.targetItemId);
-        }
-    }
-    return null;
+    });
 }
 
 function layoutGraph() {
@@ -291,8 +262,8 @@ function layoutGraph() {
 }
 
 function draw(ctx, canvas, dpr, gameData) {
-    const w = canvas.offsetWidth;
-    const h = canvas.offsetHeight;
+    const w = canvas.width / dpr;
+    const h = canvas.height / dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = COLORS.canvasBg;
@@ -301,14 +272,12 @@ function draw(ctx, canvas, dpr, gameData) {
     ctx.translate(pan.x, pan.y);
     ctx.scale(zoom, zoom);
 
-        // Group backwards edges to calculate proper bottom offsets
-        const backwardsEdges = edges.filter(e => {
-            const f = nodes.find(n => n.id === e.from);
-            const t = nodes.find(n => n.id === e.to);
-            return f && t && (f.x >= t.x);
-        });
-
-    // Edges
+    // Group backwards edges to calculate proper bottom offsets
+    const backwardsEdges = edges.filter(e => {
+        const f = nodes.find(n => n.id === e.from);
+        const t = nodes.find(n => n.id === e.to);
+        return f && t && (f.x >= t.x);
+    });    // Edges
     for (const edge of edges) {
         const fromNode = nodes.find(n => n.id === edge.from);
         const toNode = nodes.find(n => n.id === edge.to);
@@ -326,16 +295,13 @@ function draw(ctx, canvas, dpr, gameData) {
         
         let midX, midY;
         
-        // Cycle routing (backwards edge) - Orthogonal
+        // Cycle routing (backwards edge) - Circular/Bezier sweeping arc
         if (x1 >= x2) {
             const edgeIndex = backwardsEdges.indexOf(edge);
-            const bottomY = Math.max(y1, y2) + 60 + (edgeIndex * 24); // Offset each edge so they don't overlap
+            const bottomY = Math.max(y1, y2) + 80 + (edgeIndex * 40); // Offset each edge so they don't overlap
             
-            ctx.lineTo(x1 + 40, y1);
-            ctx.lineTo(x1 + 40, bottomY);
-            ctx.lineTo(x2 - 40, bottomY);
-            ctx.lineTo(x2 - 40, y2);
-            ctx.lineTo(x2, y2);
+            ctx.bezierCurveTo(x1 + 60, y1, x1 + 60, bottomY, (x1 + x2) / 2, bottomY);
+            ctx.bezierCurveTo(x2 - 60, bottomY, x2 - 60, y2, x2, y2);
             
             midX = (x1 + x2) / 2;
             midY = bottomY;
@@ -366,7 +332,7 @@ function draw(ctx, canvas, dpr, gameData) {
             ctx.drawImage(img, midX - 10, midY - 24, 20, 20);
         }
 
-        ctx.font = '600 12px Inter, sans-serif';
+        ctx.font = '600 13px Inter, sans-serif';
         ctx.fillStyle = COLORS.edgeText;
         ctx.textAlign = 'center';
         ctx.fillText(edge.label, midX, midY + 12);
@@ -382,15 +348,15 @@ function draw(ctx, canvas, dpr, gameData) {
         const border = isOutput ? COLORS.outputBorder : (isRecipe ? COLORS.recipeBorder : COLORS.rawBorder);
         const textColor = isOutput ? COLORS.outputText : (isRecipe ? COLORS.recipeText : COLORS.rawText);
 
-        ctx.shadowColor = 'rgba(0,0,0,0.3)';
-        ctx.shadowBlur = 8;
-        ctx.shadowOffsetY = 2;
+        ctx.shadowColor = hoveredNode === node ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.3)';
+        ctx.shadowBlur = hoveredNode === node ? 12 : 8;
+        ctx.shadowOffsetY = hoveredNode === node ? 0 : 2;
 
         ctx.beginPath();
         roundRect(ctx, node.x, node.y, nw, nh, 8);
         ctx.fillStyle = bg;
         ctx.fill();
-        ctx.strokeStyle = border;
+        ctx.strokeStyle = hoveredNode === node ? '#fff' : border;
         ctx.lineWidth = 1.5;
         ctx.stroke();
         ctx.shadowColor = 'transparent';

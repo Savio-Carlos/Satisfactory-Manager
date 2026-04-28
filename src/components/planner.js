@@ -73,7 +73,12 @@ function renderProductionTab(gameData, hasResult) {
         .map(([itemId]) => ({ id: itemId, name: gameData.items[itemId]?.name || itemId }))
         .sort((a, b) => a.name.localeCompare(b.name));
     
-    const itemOptions = producibleItems.map(i => `<option value="${i.id}">${i.name}</option>`).join('');
+    const dropdownItems = producibleItems.map(i => `
+        <div class="custom-dropdown-item" data-value="${i.id}">
+            ${itemIcon(i.id, gameData)}
+            <span>${i.name}</span>
+        </div>
+    `).join('');
 
     const targetRows = plannerState.targets.map((t, idx) => {
         const item = gameData.items[t.itemId];
@@ -116,11 +121,11 @@ function renderProductionTab(gameData, hasResult) {
             ${targetRows}
         </div>
         <div style="display:flex;gap:12px;margin-top:8px">
-            <div class="input-group" style="margin:0;flex:2">
-                <input type="text" id="planner-new-item-search" placeholder="Search or select item..." list="planner-items-datalist" style="width:100%" />
-                <datalist id="planner-items-datalist">
-                    ${itemOptions}
-                </datalist>
+            <div class="input-group custom-dropdown-container" style="margin:0;flex:2">
+                <input type="text" id="planner-new-item-search" placeholder="Search or select item..." autocomplete="off" />
+                <div class="custom-dropdown-menu" id="planner-item-menu">
+                    ${dropdownItems}
+                </div>
             </div>
             <button class="btn btn-ghost" id="planner-add-target" style="flex:1;border:1px dashed var(--accent-green);color:var(--accent-green)">+ Add product</button>
         </div>
@@ -238,30 +243,47 @@ function renderItemsTab(result, gameData, hasResult) {
 }
 
 export function initPlanner() {
+    let selectedItemId = null;
+    
+    // Custom Dropdown logic
+    const searchInput = document.getElementById('planner-new-item-search');
+    const menu = document.getElementById('planner-item-menu');
+    
+    if (searchInput && menu) {
+        searchInput.addEventListener('focus', () => menu.classList.add('show'));
+        document.addEventListener('click', (e) => {
+            if (!searchInput.contains(e.target) && !menu.contains(e.target)) {
+                menu.classList.remove('show');
+            }
+        });
+        
+        searchInput.addEventListener('input', () => {
+            const q = searchInput.value.toLowerCase();
+            menu.querySelectorAll('.custom-dropdown-item').forEach(item => {
+                const name = item.querySelector('span').textContent.toLowerCase();
+                item.style.display = name.includes(q) ? 'flex' : 'none';
+            });
+            menu.classList.add('show');
+        });
+        
+        menu.querySelectorAll('.custom-dropdown-item').forEach(item => {
+            item.addEventListener('click', () => {
+                selectedItemId = item.dataset.value;
+                searchInput.value = item.querySelector('span').textContent;
+                menu.classList.remove('show');
+            });
+        });
+    }
+
     // Add target button
     document.getElementById('planner-add-target')?.addEventListener('click', () => {
-        const itemInput = document.getElementById('planner-new-item-search');
-        if (!itemInput) return;
-        const val = itemInput.value;
-        if (!val) { showToast('Select an item', 'error'); return; }
+        if (!selectedItemId) { showToast('Select an item', 'error'); return; }
         
-        const { gameData } = getState();
-        const producibleItems = Object.entries(gameData.itemRecipeMap)
-            .map(([itemId]) => ({ id: itemId, name: gameData.items[itemId]?.name || itemId }));
-        
-        let itemId = val;
-        // if user typed name, try to match it
-        if (!gameData.items[val]) {
-            const match = producibleItems.find(i => i.name.toLowerCase() === val.toLowerCase());
-            if (match) itemId = match.id;
-            else { showToast('Item not found', 'error'); return; }
-        }
-
         // Check if already added
-        if (plannerState.targets.find(t => t.itemId === itemId)) {
+        if (plannerState.targets.find(t => t.itemId === selectedItemId)) {
             showToast('Item already added', 'error'); return;
         }
-        plannerState.targets.push({ itemId, rate: 10, recipeOverrides: {} });
+        plannerState.targets.push({ itemId: selectedItemId, rate: 10, recipeOverrides: {} });
         plannerState.result = null;
         rerender();
     });
