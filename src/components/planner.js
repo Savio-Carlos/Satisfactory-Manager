@@ -104,9 +104,16 @@ function renderProductionTab(gameData, hasResult) {
         </div>`;
     }).join('');
 
+    const globalBalance = computeGlobalBalance();
     const inputRows = plannerState.inputs.map((inp, idx) => {
         const item = gameData.items[inp.itemId];
-        return `<div class="target-row" style="display:flex;gap:12px;margin-bottom:8px;align-items:center">
+        const b = globalBalance[inp.itemId];
+        const available = b ? Math.max(0, b.produced - b.consumed) : 0;
+        const overdraw = (inp.rate || 0) > available + 0.001;
+        const availLabel = inp.itemId
+            ? `<div style="font-size:11px;color:${overdraw ? 'var(--accent-red)' : 'var(--text-muted)'};margin-top:2px;font-family:var(--font-mono)">${fmtRate(available, inp.itemId, gameData)} available</div>`
+            : '';
+        return `<div class="target-row" style="display:flex;gap:12px;margin-bottom:8px;align-items:flex-start">
             <div class="input-group" style="margin:0;flex:2">
                 <div style="display:flex;align-items:center;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:0 8px">
                     ${item ? itemIcon(inp.itemId, gameData, 20) : ''}
@@ -115,11 +122,12 @@ function renderProductionTab(gameData, hasResult) {
                         ${producibleItems.map(i => `<option value="${i.id}" ${i.id === inp.itemId ? 'selected' : ''}>${i.name}</option>`).join('')}
                     </select>
                 </div>
+                ${availLabel}
             </div>
             <div class="input-group" style="margin:0;flex:1;max-width:150px">
                 <input type="number" class="input-rate-input" data-idx="${idx}" value="${inp.rate || 0}" min="0.1" step="0.1" style="border-radius:var(--radius-sm)" />
             </div>
-            <div style="color:var(--text-secondary);font-size:13px;width:60px">items/min</div>
+            <div style="color:var(--text-secondary);font-size:13px;width:60px;padding-top:10px">items/min</div>
             <button class="btn btn-ghost btn-sm btn-remove-input" data-idx="${idx}" style="color:var(--accent-red);padding:0 12px;height:38px">✕</button>
         </div>`;
     }).join('');
@@ -154,6 +162,7 @@ function renderProductionTab(gameData, hasResult) {
                 </div>
                 <button class="btn btn-ghost" id="planner-add-target" style="flex:1;border:1px dashed var(--accent-green);color:var(--accent-green)">+ Add Product</button>
             </div>
+            <div id="product-ingredients-preview" style="margin-top:8px"></div>
         </div>
         
         <div style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:16px;flex:1">
@@ -315,6 +324,77 @@ export function initPlanner() {
                 selectedItemId = item.dataset.value;
                 searchInput.value = item.querySelector('span').textContent;
                 menu.classList.remove('show');
+                updateIngredientPreview(selectedItemId);
+            });
+        });
+
+        searchInput.addEventListener('input', () => {
+            if (!searchInput.value.trim()) updateIngredientPreview(null);
+        });
+    }
+
+    function updateIngredientPreview(itemId) {
+        const preview = document.getElementById('product-ingredients-preview');
+        if (!preview) return;
+        if (!itemId) { preview.innerHTML = ''; return; }
+
+        const { gameData } = getState();
+        const availableRecipes = gameData.itemRecipeMap[itemId] || [];
+        const recipeId = availableRecipes.find(rId => {
+            const r = gameData.recipes[rId];
+            return !r.isAlternate && r.products[0]?.itemId === itemId;
+        }) || availableRecipes.find(rId => !gameData.recipes[rId].isAlternate) || availableRecipes[0];
+
+        if (!recipeId) { preview.innerHTML = ''; return; }
+        const recipe = gameData.recipes[recipeId];
+        if (!recipe || !recipe.manufacturingDuration || !recipe.ingredients?.length) { preview.innerHTML = ''; return; }
+
+        const targetProduct = recipe.products.find(p => p.itemId === itemId);
+        if (!targetProduct || !targetProduct.amount) { preview.innerHTML = ''; return; }
+
+        const cyclesPerMin = 60 / recipe.manufacturingDuration;
+        const outputPerMin = targetProduct.amount * cyclesPerMin;
+        const balance = computeGlobalBalance();
+
+        const rows = recipe.ingredients.map(ing => {
+            const item = gameData.items[ing.itemId];
+            const unitRate = (ing.amount * cyclesPerMin) / outputPerMin; // per 1 target/min
+            const b = balance[ing.itemId];
+            const surplus = b ? Math.max(0, b.produced - b.consumed) : 0;
+            const alreadyAdded = plannerState.inputs.some(i => i.itemId === ing.itemId);
+
+            const surplusLabel = surplus > 0.001
+                ? `<span style="font-size:10px;color:var(--color-surplus);font-family:var(--font-mono)">${fmtRate(surplus, ing.itemId, gameData)} avail</span>`
+                : `<span style="font-size:10px;color:var(--text-muted)">no surplus</span>`;
+
+            const addBtn = surplus > 0.001 && !alreadyAdded
+                ? `<button class="btn btn-ghost btn-sm preview-add-input" data-item="${ing.itemId}" data-surplus="${surplus}" style="padding:2px 8px;font-size:11px;height:22px;color:var(--accent-blue);border:1px solid var(--accent-blue)">+ Add</button>`
+                : alreadyAdded
+                    ? `<span style="font-size:10px;color:var(--text-muted)">added</span>`
+                    : '';
+
+            return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border-color)">
+                ${itemIcon(ing.itemId, gameData, 18, 'item-icon-sm')}
+                <span style="flex:1;font-size:12px">${item?.name || ing.itemId}</span>
+                <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono)">${fmtRate(unitRate, ing.itemId, gameData)}/unit</span>
+                ${surplusLabel}
+                ${addBtn}
+            </div>`;
+        }).join('');
+
+        preview.innerHTML = `<div style="background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:8px 10px">
+            <div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Recipe Ingredients (per 1/min)</div>
+            ${rows}
+        </div>`;
+
+        preview.querySelectorAll('.preview-add-input').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const ingItemId = btn.dataset.item;
+                const surplus = parseFloat(btn.dataset.surplus) || 0;
+                if (plannerState.inputs.find(i => i.itemId === ingItemId)) return;
+                plannerState.inputs.push({ itemId: ingItemId, rate: surplus > 0 ? surplus : 10 });
+                plannerState.result = null;
+                rerender();
             });
         });
     }
@@ -353,12 +433,13 @@ export function initPlanner() {
     // Add target button
     document.getElementById('planner-add-target')?.addEventListener('click', () => {
         if (!selectedItemId) { showToast('Select an item', 'error'); return; }
-        
+
         // Check if already added
         if (plannerState.targets.find(t => t.itemId === selectedItemId)) {
             showToast('Item already added', 'error'); return;
         }
         plannerState.targets.push({ itemId: selectedItemId, rate: 10, recipeOverrides: {} });
+        selectedItemId = null;
         plannerState.result = null;
         rerender();
     });
@@ -549,8 +630,22 @@ export function initPlanner() {
             recipeId: step.recipeId, buildingId: step.buildingId,
             count: step.machineCount, clockSpeed: step.clockSpeed
         }));
-        
-        showAddFactoryModal(`${names} Factory`, `Planned production`, buildings);
+
+        // Carry the planner's available-inputs into the factory's sourcing map.
+        // Use the chain's *actual* raw consumption for each sourced item — the
+        // user-entered rate is just a cap; if the chain only needed 300 of the
+        // 1000 they offered, source 300. Conversely, if Heat Sink really needs
+        // 150 Alclad Sheets and the user offered 150, that's exactly what the
+        // server consumed. Either way, raw[itemId] is the right number.
+        const sourcedInputs = {};
+        const raw = plannerState.result.rawResources || {};
+        for (const inp of plannerState.inputs) {
+            if (!inp.itemId) continue;
+            const actualRate = Number(raw[inp.itemId]) || 0;
+            if (actualRate > 0) sourcedInputs[inp.itemId] = actualRate;
+        }
+
+        showAddFactoryModal(`${names} Factory`, `Planned production`, buildings, sourcedInputs);
     });
 }
 

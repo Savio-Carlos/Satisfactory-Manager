@@ -42,5 +42,9 @@ export const api = {
         request('/calculate', { method: 'POST', body: JSON.stringify({ targetItemId, targetRate, recipeOverrides, availableInputs }) }),
 
     getSettings: () => request('/settings'),
-    updateSettings: (data) => request('/settings', { method: 'PUT', body: JSON.stringify(data) })
+    updateSettings: (data) => request('/settings', { method: 'PUT', body: JSON.stringify(data) }),
+
+    getSaveState: () => request('/save-state'),
+    putSaveState: (data) => request('/save-state', { method: 'PUT', body: JSON.stringify(data) }),
+    deleteSaveState: () => request('/save-state', { method: 'DELETE' })
 };

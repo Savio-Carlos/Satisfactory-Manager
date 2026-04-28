@@ -1,4 +1,4 @@
-import { getState, setState, showToast, showModal, hideModal, fmt, fmtRate, itemIcon, buildingIcon, renderProgressBar, computeGlobalBalance, getSourcedRate, computeFactoryLocalIO } from '../modules/state.js';
+import { getState, setState, showToast, showModal, hideModal, fmt, fmtRate, itemIcon, buildingIcon, renderProgressBar, computeGlobalBalance, getSourcedRate } from '../modules/state.js';
 import { api } from '../modules/api.js';
 import { initFlowchart } from './flowchart.js';
 
@@ -287,41 +287,30 @@ function renderFactoryDetail() {
                 ? `<div style="font-size:10px;color:${overdrawing ? 'var(--accent-red)' : 'var(--text-muted)'};margin-top:2px">Avail: ${fmtRate(otherSurplus, itemId, gameData)}</div>`
                 : '';
 
-            // Disable input for items the factory doesn't actually consume.
-            const inputDisabled = summary.consumed <= 0;
-            const sourcedInput = `
-            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
-                <div style="display:flex;align-items:center;gap:4px">
-                    <input type="number" class="source-rate-input" data-item="${itemId}" data-max="${summary.consumed}"
-                        value="${sourced > 0 ? sourced : ''}" placeholder="0" min="0" max="${summary.consumed}" step="0.1"
-                        ${inputDisabled ? 'disabled' : ''}
-                        style="width:90px;padding:4px 6px;font-size:12px;font-family:var(--font-mono);text-align:right;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary)" />
-                    <button class="btn btn-ghost btn-sm source-fill-btn" data-item="${itemId}" data-max="${summary.consumed}"
-                        ${inputDisabled ? 'disabled' : ''}
-                        title="Source the full consumption from global storage"
-                        style="padding:2px 6px;font-size:10px;height:24px">Max</button>
-                </div>
-                ${availableHint}
-            </div>`;
+            const sourcedCell = sourced > 0
+                ? `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:2px">
+                    <span class="rate-cell" style="color:var(--accent-blue)">${fmtRate(sourced, itemId, gameData)}</span>
+                    ${availableHint}
+                   </div>`
+                : `<span style="color:var(--text-muted)">-</span>`;
 
             rows += `<tr>
                 <td><div class="item-cell">${itemIcon(itemId, gameData)}<span>${item?.name || itemId}</span></div></td>
                 <td class="rate-cell rate-surplus">${summary.produced > 0 ? fmtRate(summary.produced, itemId, gameData) : '-'}</td>
                 <td class="rate-cell rate-deficit">${summary.consumed > 0 ? fmtRate(summary.consumed, itemId, gameData) : '-'}</td>
-                <td class="rate-cell" style="color:var(--accent-blue)">${sourced > 0 ? fmtRate(sourced, itemId, gameData) : '-'}</td>
+                <td>${sourcedCell}</td>
                 <td class="rate-cell ${netClass}">${fmtRate(net, itemId, gameData)}</td>
-                <td>${sourcedInput}</td>
             </tr>`;
         }
 
         tabContent = `<div class="card">
             <div class="card-title" style="margin-bottom:14px">Material I/O</div>
             <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">
-                Set a <strong>Sourced</strong> rate to draw an item from global storage. Local production only needs to cover the unsourced portion. If you source more than is globally available, the dashboard will show a deficit.
+                <strong>Sourced</strong> rates are set when adding this factory from the Planner. They indicate how much of each input is drawn from global storage rather than produced locally.
             </div>
             <div class="table-container" style="max-height:60vh;overflow-y:auto">
-                <table><thead><tr><th>Item</th><th>Produced</th><th>Consumed</th><th>Sourced</th><th>Net</th><th style="text-align:right">Source from Global</th></tr></thead>
-                <tbody>${rows || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted)">No materials used</td></tr>'}</tbody></table>
+                <table><thead><tr><th>Item</th><th>Produced</th><th>Consumed</th><th>Sourced</th><th>Net</th></tr></thead>
+                <tbody>${rows || '<tr><td colspan="5" style="text-align:center;padding:20px;color:var(--text-muted)">No materials used</td></tr>'}</tbody></table>
             </div>
         </div>`;
     }
@@ -334,15 +323,38 @@ function renderFactoryDetail() {
         // Calculate global balance excluding this factory (to see impact)
         const globalBalance = computeGlobalBalance(); // uses all factories
         const thisFactoryImpact = computeGlobalBalance([factory], false); // only this factory, no save data
-        
+
+        // Sourced items pulled from global storage by this factory.
+        const sourcedMap = (factory.sourcedInputs && typeof factory.sourcedInputs === 'object' && !Array.isArray(factory.sourcedInputs))
+            ? factory.sourcedInputs : {};
+        const otherFactoriesBalance = computeGlobalBalance(factories.filter(f => f.id !== factory.id), true);
+
+        let sourcedRows = '';
+        for (const [itemId, rate] of Object.entries(sourcedMap)) {
+            if (!(rate > 0)) continue;
+            const item = gameData.items[itemId];
+            const otherBal = otherFactoriesBalance[itemId];
+            const otherSurplus = otherBal ? Math.max(0, otherBal.produced - otherBal.consumed) : 0;
+            const overdrawing = rate > otherSurplus + 0.001;
+            const status = overdrawing
+                ? `<span class="rate-cell rate-deficit">Overdraw — short ${fmtRate(rate - otherSurplus, itemId, gameData)}</span>`
+                : `<span class="rate-cell rate-surplus">OK</span>`;
+            sourcedRows += `<tr>
+                <td><div class="item-cell">${itemIcon(itemId, gameData)}<span>${item?.name || itemId}</span></div></td>
+                <td class="rate-cell" style="color:var(--accent-blue)">${fmtRate(rate, itemId, gameData)}</td>
+                <td class="rate-cell">${fmtRate(otherSurplus, itemId, gameData)}</td>
+                <td>${status}</td>
+            </tr>`;
+        }
+
         let rows = '';
         for (const [itemId, impact] of Object.entries(thisFactoryImpact)) {
             const global = globalBalance[itemId] || { produced: 0, consumed: 0 };
             const item = gameData.items[itemId];
-            
+
             const prodPct = global.produced > 0 ? (impact.produced / global.produced) * 100 : (impact.produced > 0 ? 100 : 0);
             const consPct = global.consumed > 0 ? (impact.consumed / global.consumed) * 100 : (impact.consumed > 0 ? 100 : 0);
-            
+
             if (impact.produced > 0 || impact.consumed > 0) {
                 rows += `<tr>
                     <td><div class="item-cell">${itemIcon(itemId, gameData)}<span>${item?.name || itemId}</span></div></td>
@@ -352,8 +364,17 @@ function renderFactoryDetail() {
                 </tr>`;
             }
         }
-        
-        tabContent = `<div class="card">
+
+        const sourcedCard = sourcedRows
+            ? `<div class="card" style="margin-bottom:16px">
+                <div class="card-title" style="margin-bottom:14px">Globally Sourced Inputs</div>
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Items this factory pulls from global storage. If draw exceeds what other factories provide, the dashboard will show that item in deficit.</div>
+                <table><thead><tr><th style="min-width:200px">Item</th><th>Sourced Rate</th><th>Available (other factories)</th><th>Status</th></tr></thead>
+                <tbody>${sourcedRows}</tbody></table>
+            </div>`
+            : '';
+
+        tabContent = `${sourcedCard}<div class="card">
             <div class="card-title" style="margin-bottom:14px">Impact on Global Grid</div>
             <div class="table-container" style="max-height:60vh;overflow-y:auto">
                 <table><thead><tr><th style="min-width:200px">Item</th><th>Produced Here</th><th>Consumed Here</th><th>Usage (Global)</th></tr></thead>
@@ -440,56 +461,6 @@ function initFactoryDetail() {
         });
     });
     
-    if (activeTab === 'materials') {
-        const persistSourced = async (itemId, rawValue, maxRate) => {
-            const { factories, gameData } = getState();
-            const factory = factories.find(f => f.id === activeFactoryId);
-            if (!factory) return;
-
-            // Migrate legacy `string[]` shape: each listed item was implicitly sourced
-            // at full consumption. Convert to an explicit rate map using current consumption.
-            if (Array.isArray(factory.sourcedInputs)) {
-                const local = computeFactoryLocalIO(factory, gameData);
-                const obj = {};
-                for (const id of factory.sourcedInputs) {
-                    obj[id] = local[id]?.consumed || 0;
-                }
-                factory.sourcedInputs = obj;
-            }
-            if (!factory.sourcedInputs || typeof factory.sourcedInputs !== 'object') {
-                factory.sourcedInputs = {};
-            }
-
-            const max = Number(maxRate) || 0;
-            let rate = Number(rawValue);
-            if (!isFinite(rate) || rate <= 0) {
-                delete factory.sourcedInputs[itemId];
-            } else {
-                rate = Math.min(rate, max);
-                factory.sourcedInputs[itemId] = rate;
-            }
-
-            try {
-                await api.updateFactory(factory.id, factory);
-                const updatedFactories = await api.getFactories();
-                setState('factories', updatedFactories);
-                rerender();
-            } catch (err) { showToast(err.message, 'error'); }
-        };
-
-        document.querySelectorAll('.source-rate-input').forEach(input => {
-            input.addEventListener('change', (e) => {
-                persistSourced(e.target.dataset.item, e.target.value, e.target.dataset.max);
-            });
-        });
-
-        document.querySelectorAll('.source-fill-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                persistSourced(btn.dataset.item, btn.dataset.max, btn.dataset.max);
-            });
-        });
-    }
-
     if (activeTab === 'diagram' && factoryResultCache) {
         const { gameData } = getState();
         setTimeout(() => initFlowchart(factoryResultCache, gameData), 50);
@@ -611,7 +582,7 @@ function updateProductionPreview(targetItemId, gameData) {
     document.getElementById('production-preview').innerHTML = preview;
 }
 
-export function showAddFactoryModal(initialName = '', initialDescription = '', prefilledBuildings = null) {
+export function showAddFactoryModal(initialName = '', initialDescription = '', prefilledBuildings = null, prefilledSourcedInputs = null) {
     const { saveData } = getState();
     const hasSave = !!saveData;
 
@@ -658,6 +629,9 @@ export function showAddFactoryModal(initialName = '', initialDescription = '', p
         
         if (prefilledBuildings) {
             payload.buildings = prefilledBuildings;
+        }
+        if (prefilledSourcedInputs && Object.keys(prefilledSourcedInputs).length > 0) {
+            payload.sourcedInputs = prefilledSourcedInputs;
         }
         
         try {

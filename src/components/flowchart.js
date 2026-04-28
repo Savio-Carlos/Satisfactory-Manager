@@ -37,6 +37,10 @@ let imageCache = new Map();
 let hoveredNode = null;
 let currentResizeHandler = null;
 let redrawScheduled = false;
+// Identity of the last result we built a graph for. Reuse the cached layout
+// (nodes/edges/pan/zoom/drag positions) when reinitialising for the same result —
+// e.g. switching tabs and coming back, or toggling fullscreen.
+let lastResult = null;
 
 export function renderFlowchart() { return ''; }
 
@@ -55,19 +59,25 @@ export function initFlowchart(result, gameData) {
     }
     tooltipDiv.style.display = 'none';
 
-    // Reset state
-    imageCache = new Map();
-    pan = { x: 50, y: 50 };
-    zoom = 1;
+    const sameResult = result === lastResult && nodes.length > 0;
+
+    // Drag/hover state always resets across init calls; pan/zoom and the
+    // graph itself only reset when the underlying result has changed.
     dragNode = null;
     dragOffset = { x: 0, y: 0 };
     hoveredNode = null;
 
+    if (!sameResult) {
+        imageCache = new Map();
+        pan = { x: 50, y: 50 };
+        zoom = 1;
+        buildGraph(result, gameData);
+        layoutGraph();
+        lastResult = result;
+    }
+
     const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
-
-    buildGraph(result, gameData);
-    layoutGraph();
 
     const requestRedraw = () => {
         if (redrawScheduled) return;
@@ -175,7 +185,10 @@ export function initFlowchart(result, gameData) {
         const d = node.tooltipData;
         let html = `<strong>${node.label1}</strong><br/>`;
         if (d.machines) {
-            html += `<div style="font-size:12px;margin-bottom:8px">${d.machineCountRaw}x ${d.buildingName} at ${d.clockSpeed}% clock speed<br/>Needed power: ${d.power} MW</div>`;
+            const machineLine = d.machineSplit
+                ? `${d.machineSplit} ${d.buildingName} (${d.machineCountRaw} raw)`
+                : `${d.machineCountRaw}x ${d.buildingName} at ${d.clockSpeed}% clock speed`;
+            html += `<div style="font-size:12px;margin-bottom:8px">${machineLine}<br/>Needed power: ${d.power} MW</div>`;
         }
         if (d.inputs && d.inputs.length > 0) {
             html += `<div style="margin-bottom:4px">`;
@@ -214,11 +227,17 @@ function buildGraph(result, gameData) {
 
     for (const step of result.steps) {
         const building = step.buildingId ? gameData.buildings[step.buildingId] : null;
+        const split = splitMachines(step.machineCountRaw);
+        const buildingName = building?.name || 'Machine';
+        const machineLabel = split.partialPct > 0
+            ? `${split.full}× @ 100% + 1× @ ${split.partialPct}%`
+            : `${split.full}× @ 100%`;
         const tooltipData = {
             machines: true,
             machineCountRaw: step.machineCountRaw.toFixed(3),
-            buildingName: building?.name || 'Machine',
+            buildingName,
             clockSpeed: step.clockSpeed,
+            machineSplit: machineLabel,
             power: (step.power || 0).toFixed(3),
             inputs: step.inputs.map(i => ({ name: gameData.items[i.itemId]?.name || i.itemId, rate: (i.ratePerMachine * step.machineCountRaw).toFixed(3) })),
             outputs: step.outputs.map(o => ({ name: gameData.items[o.itemId]?.name || o.itemId, rate: (o.ratePerMachine * step.machineCountRaw).toFixed(3) }))
@@ -227,8 +246,8 @@ function buildGraph(result, gameData) {
             id: step.recipeId + '__' + step.targetItemId,
             type: 'recipe',
             label1: step.recipeName,
-            label2: `${Math.ceil(step.machineCountRaw)}× ${building?.name || 'Machine'}`,
-            label3: `${step.clockSpeed}%`,
+            label2: `${buildingName} — ${machineLabel}`,
+            label3: null,
             buildingImg: building?.image ? getImageUrl(building.image) : null,
             tooltipData: tooltipData,
             x: 0, y: 0
@@ -257,6 +276,7 @@ function buildGraph(result, gameData) {
     const targetMap = new Map(targets.map(t => [t.itemId, t.rate]));
 
     for (const t of targets) {
+        if (t.rate < 0.001) continue; // skip zero-rate targets (fully consumed internally)
         const targetItem = gameData.items[t.itemId];
         nodes.push({
             id: 'output__' + t.itemId,
@@ -289,13 +309,15 @@ function buildGraph(result, gameData) {
         }
         if (targetMap.has(step.targetItemId)) {
             const rate = targetMap.get(step.targetItemId);
-            const targetItem = gameData.items[step.targetItemId];
-            edges.push({
-                from: stepNode.id, to: 'output__' + step.targetItemId,
-                label: fmtRate(rate, step.targetItemId, gameData),
-                itemName: targetItem?.name || step.targetItemId,
-                itemImg: targetItem?.image ? getImageUrl(targetItem.image) : null
-            });
+            if (rate >= 0.001) { // skip if target was pruned (0-rate)
+                const targetItem = gameData.items[step.targetItemId];
+                edges.push({
+                    from: stepNode.id, to: 'output__' + step.targetItemId,
+                    label: fmtRate(rate, step.targetItemId, gameData),
+                    itemName: targetItem?.name || step.targetItemId,
+                    itemImg: targetItem?.image ? getImageUrl(targetItem.image) : null
+                });
+            }
         }
         for (const out of step.outputs) {
             if (targetMap.has(out.itemId)) continue;
@@ -336,7 +358,7 @@ function buildGraph(result, gameData) {
 
 function findStepProducing(itemId, steps, stepNodes) {
     for (const step of steps) {
-        if (step.outputs.some(o => o.itemId === itemId)) {
+        if (step.targetItemId === itemId) {
             return stepNodes.get(step.recipeId + '__' + step.targetItemId);
         }
     }
@@ -398,83 +420,82 @@ function draw(ctx, canvas, dpr, gameData) {
     ctx.translate(pan.x, pan.y);
     ctx.scale(zoom, zoom);
 
-    // Classify edges. A "backward" edge is a cycle: target's left edge is at or
-    // before source's right edge, so a straight diagonal would overlap nodes.
-    const isBackward = (edge) => {
-        const f = nodes.find(n => n.id === edge.from);
-        const t = nodes.find(n => n.id === edge.to);
-        if (!f || !t) return false;
-        const fW = f.type === 'recipe' || f.type === 'output' ? NODE_W : RAW_W;
-        return (f.x + fW) >= t.x;
-    };
-    const backwardsEdges = edges.filter(isBackward);
+    // Adaptive edge routing: each edge attaches to whichever side of source &
+    // target makes the most natural connection given their relative position.
+    // Endpoints can be top/bottom/left/right. Bezier control handles pull
+    // outward from the chosen side, so the curve always exits perpendicular
+    // to the box edge — which gracefully handles dragged-around nodes.
+
+    // Pre-compute bidirectional pairs so we can offset them to avoid overlap.
+    const biDirectional = new Set();
+    for (const e1 of edges) {
+        if (edges.some(e2 => e2.from === e1.to && e2.to === e1.from)) {
+            biDirectional.add(e1.from + '→' + e1.to);
+        }
+    }
 
     for (const edge of edges) {
         const fromNode = nodes.find(n => n.id === edge.from);
         const toNode = nodes.find(n => n.id === edge.to);
         if (!fromNode || !toNode) continue;
-        const fromW = fromNode.type === 'recipe' || fromNode.type === 'output' ? NODE_W : RAW_W;
-        const fromH = fromNode.type === 'recipe' || fromNode.type === 'output' ? NODE_H : RAW_H;
-        const toW = toNode.type === 'recipe' || toNode.type === 'output' ? NODE_W : RAW_W;
-        const toH = toNode.type === 'recipe' || toNode.type === 'output' ? NODE_H : RAW_H;
 
-        let x1, y1, x2, y2, midX, midY, tanX, tanY;
+        const exitSide = pickSide(fromNode, toNode);
+        const enterSide = pickSide(toNode, fromNode);
+        const fromC = nodeCenter(fromNode);
+        const toC = nodeCenter(toNode);
+        const p1 = attachPoint(fromNode, exitSide, toC);
+        const p2 = attachPoint(toNode, enterSide, fromC);
 
-        if (isBackward(edge)) {
-            // Cycle: exit source's BOTTOM, enter target's BOTTOM. Avoids the right side.
-            x1 = fromNode.x + fromW / 2;
-            y1 = fromNode.y + fromH;
-            x2 = toNode.x + toW / 2;
-            y2 = toNode.y + toH;
+        // Control distance scales with edge length so cycles get a fuller curve.
+        const dist = Math.min(180, Math.max(60, Math.hypot(p2.x - p1.x, p2.y - p1.y) * 0.45));
+        const o1 = sideNormal(exitSide, dist);
+        const o2 = sideNormal(enterSide, dist);
+        const c1 = { x: p1.x + o1.x, y: p1.y + o1.y };
+        const c2 = { x: p2.x + o2.x, y: p2.y + o2.y };
 
-            const edgeIndex = backwardsEdges.indexOf(edge);
-            const bottomY = Math.max(y1, y2) + 70 + (edgeIndex * 36);
-            const c1x = x1, c1y = bottomY;
-            const c2x = x2, c2y = bottomY;
-
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.bezierCurveTo(c1x, c1y, c2x, c2y, x2, y2);
-
-            midX = (x1 + x2) / 2;
-            midY = bottomY;
-            // Tangent at end of cubic bezier = end - lastControl
-            tanX = x2 - c2x;
-            tanY = y2 - c2y;
-        } else {
-            // Forward edge: source.right-center → target.left-center, straight diagonal.
-            x1 = fromNode.x + fromW;
-            y1 = fromNode.y + fromH / 2;
-            x2 = toNode.x;
-            y2 = toNode.y + toH / 2;
-
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-
-            midX = (x1 + x2) / 2;
-            midY = (y1 + y2) / 2;
-            tanX = x2 - x1;
-            tanY = y2 - y1;
+        // For bidirectional pairs, shift both curves perpendicular to the
+        // connection direction so the two arrows are visually separate.
+        if (biDirectional.has(edge.from + '→' + edge.to)) {
+            const OFFSET = 20;
+            const dx = toC.x - fromC.x;
+            const dy = toC.y - fromC.y;
+            const len = Math.hypot(dx, dy) || 1;
+            const px = -dy / len * OFFSET;
+            const py =  dx / len * OFFSET;
+            p1.x += px; p1.y += py;
+            p2.x += px; p2.y += py;
+            c1.x += px; c1.y += py;
+            c2.x += px; c2.y += py;
         }
 
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, p2.x, p2.y);
         ctx.strokeStyle = COLORS.edge;
         ctx.lineWidth = 1.5;
         ctx.stroke();
 
-        // Arrow at target endpoint, oriented along edge tangent.
-        drawArrow(ctx, x2, y2, tanX, tanY);
+        // Arrow at target endpoint, oriented along edge tangent at the end.
+        const tanX = p2.x - c2.x;
+        const tanY = p2.y - c2.y;
+        drawArrow(ctx, p2.x, p2.y, tanX, tanY);
+
+        // Label position: bezier midpoint at t=0.5
+        const t = 0.5;
+        const mt = 1 - t;
+        const midX = mt*mt*mt*p1.x + 3*mt*mt*t*c1.x + 3*mt*t*t*c2.x + t*t*t*p2.x;
+        const midY = mt*mt*mt*p1.y + 3*mt*mt*t*c1.y + 3*mt*t*t*c2.y + t*t*t*p2.y;
 
         // Edge label with item icon
         if (edge.itemImg) {
             const img = imageCache.get(edge.itemImg);
-            if (img) ctx.drawImage(img, midX - 10, midY - 24, 20, 20);
+            if (img) ctx.drawImage(img, midX - 12, midY - 28, 24, 24);
         }
 
-        ctx.font = '600 13px Inter, sans-serif';
+        ctx.font = '600 15px Inter, sans-serif';
         ctx.fillStyle = COLORS.edgeText;
         ctx.textAlign = 'center';
-        ctx.fillText(edge.label, midX, midY + 12);
+        ctx.fillText(edge.label, midX, midY + 14);
     }
 
     // Nodes
@@ -505,27 +526,27 @@ function draw(ctx, canvas, dpr, gameData) {
         if (iconUrl) {
             const img = imageCache.get(iconUrl);
             if (img) {
-                const iconSize = isRecipe ? 28 : 22;
+                const iconSize = isRecipe ? 36 : 28;
                 ctx.drawImage(img, node.x + 8, node.y + (nh - iconSize) / 2, iconSize, iconSize);
             }
         }
 
-        const textX = iconUrl ? node.x + 42 : node.x + nw / 2;
+        const textX = iconUrl ? node.x + 50 : node.x + nw / 2;
         const align = iconUrl ? 'left' : 'center';
         ctx.fillStyle = textColor;
         ctx.textAlign = align;
-        ctx.font = 'bold 13px Inter, sans-serif';
-        ctx.fillText(truncate(node.label1, 18), textX, node.y + nh / 2 - (node.label3 ? 10 : (node.label2 ? 6 : 2)));
+        ctx.font = 'bold 16px Inter, sans-serif';
+        ctx.fillText(truncate(node.label1, 14), textX, node.y + nh / 2 - (node.label3 ? 12 : (node.label2 ? 7 : 2)));
 
         if (node.label2) {
-            ctx.font = '12px Inter, sans-serif';
+            ctx.font = '14px Inter, sans-serif';
             ctx.fillStyle = isRecipe ? 'rgba(255,255,255,0.85)' : COLORS.rawText;
-            ctx.fillText(truncate(node.label2, 22), textX, node.y + nh / 2 + 6);
+            ctx.fillText(truncate(node.label2, 18), textX, node.y + nh / 2 + 8);
         }
         if (node.label3) {
-            ctx.font = '10px JetBrains Mono, monospace';
+            ctx.font = '12px JetBrains Mono, monospace';
             ctx.fillStyle = isRecipe ? 'rgba(255,255,255,0.7)' : 'rgba(255,255,255,0.5)';
-            ctx.fillText(node.label3, textX, node.y + nh / 2 + 20);
+            ctx.fillText(node.label3, textX, node.y + nh / 2 + 24);
         }
     }
     ctx.restore();
@@ -542,6 +563,75 @@ function roundRect(ctx, x, y, w, h, r) {
 function truncate(str, len) {
     if (!str) return '';
     return str.length > len ? str.slice(0, len - 1) + '…' : str;
+}
+
+/**
+ * Split a fractional machine count into N full-clock machines + 1 partial.
+ * E.g. 12.4 → { full: 12, partialPct: 40 }. 12.0 → { full: 12, partialPct: 0 }.
+ */
+function splitMachines(machineCountRaw) {
+    const whole = Math.floor(machineCountRaw + 1e-9);
+    const partial = machineCountRaw - whole;
+    if (partial < 0.001) return { full: whole, partialPct: 0 };
+    return { full: whole, partialPct: Math.round(partial * 10000) / 100 };
+}
+
+function nodeSize(node) {
+    const isBig = node.type === 'recipe' || node.type === 'output';
+    return { w: isBig ? NODE_W : RAW_W, h: isBig ? NODE_H : RAW_H };
+}
+
+function nodeCenter(node) {
+    const { w, h } = nodeSize(node);
+    return { x: node.x + w / 2, y: node.y + h / 2 };
+}
+
+/**
+ * Pick which side of `fromNode` to attach an edge to, based on the relative
+ * position of `toNode`. Side is whichever axis (x or y) has the larger gap
+ * between the centers — so a target far to the right exits "right", a target
+ * directly below exits "bottom", etc.
+ */
+function pickSide(fromNode, toNode) {
+    const fc = nodeCenter(fromNode);
+    const tc = nodeCenter(toNode);
+    const dx = tc.x - fc.x;
+    const dy = tc.y - fc.y;
+    if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'right' : 'left';
+    return dy >= 0 ? 'bottom' : 'top';
+}
+
+/**
+ * Attach an edge to a side of `node`, but slide the attachment point along
+ * that side toward the other endpoint (the "toward" target). This spreads
+ * out incoming/outgoing edges on a node with multiple connections instead of
+ * stacking them all at the side midpoint.
+ *
+ * Falls back to the side midpoint when no toward point is given.
+ */
+function attachPoint(node, side, toward) {
+    const { w, h } = nodeSize(node);
+    const margin = 12;
+    if (side === 'right' || side === 'left') {
+        const x = side === 'right' ? node.x + w : node.x;
+        const yMin = node.y + margin;
+        const yMax = node.y + h - margin;
+        const y = toward ? Math.min(yMax, Math.max(yMin, toward.y)) : node.y + h / 2;
+        return { x, y };
+    } else {
+        const y = side === 'top' ? node.y : node.y + h;
+        const xMin = node.x + margin;
+        const xMax = node.x + w - margin;
+        const x = toward ? Math.min(xMax, Math.max(xMin, toward.x)) : node.x + w / 2;
+        return { x, y };
+    }
+}
+
+function sideNormal(side, dist) {
+    if (side === 'right')  return { x: +dist, y: 0 };
+    if (side === 'left')   return { x: -dist, y: 0 };
+    if (side === 'top')    return { x: 0, y: -dist };
+    return                       { x: 0, y: +dist };
 }
 
 function drawArrow(ctx, tipX, tipY, tanX, tanY) {

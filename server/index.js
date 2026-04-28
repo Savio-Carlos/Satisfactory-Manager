@@ -89,6 +89,7 @@ app.post('/api/factories', (req, res) => {
         description: req.body.description || '',
         buildings: req.body.buildings || [],
         countedInSave: req.body.countedInSave || false,
+        sourcedInputs: (req.body.sourcedInputs && typeof req.body.sourcedInputs === 'object') ? req.body.sourcedInputs : {},
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
     };
@@ -188,6 +189,25 @@ app.get('/api/img', async (req, res) => {
     } catch (e) {
         res.status(500).json({ error: 'Failed to fetch image' });
     }
+});
+
+// -- Persisted save state --
+// The client parses .sav files locally, so we accept the digest of the parse here
+// and persist it so the user doesn't have to re-upload after a page reload.
+app.put('/api/save-state', (req, res) => {
+    userData.lastSave = req.body || null;
+    saveUserData();
+    res.json({ ok: true });
+});
+
+app.get('/api/save-state', (req, res) => {
+    res.json(userData.lastSave || null);
+});
+
+app.delete('/api/save-state', (req, res) => {
+    userData.lastSave = null;
+    saveUserData();
+    res.json({ ok: true });
 });
 
 // -- Settings --
@@ -330,6 +350,66 @@ function calculateProductionChain(targetItemId, targetRate, recipeOverrides, ava
     }
 
     resolve(targetItemId, targetRate);
+
+    // Byproduct credit pass 1: reduce raw resource demand for items also produced as byproducts.
+    for (const step of Object.values(steps)) {
+        for (const out of step.outputs) {
+            if (out.itemId === step.targetItemId) continue;
+            if (!(out.itemId in rawResources)) continue;
+            const byproductRate = out.ratePerMachine * step.machineCount;
+            rawResources[out.itemId] = Math.max(0, rawResources[out.itemId] - byproductRate);
+            if (rawResources[out.itemId] < 1e-6) delete rawResources[out.itemId];
+        }
+    }
+
+    // Byproduct credit pass 2: if a byproduct satisfies an intermediate step's
+    // target (e.g. Alumina Solution produces Silica which feeds Quartz Processing),
+    // reduce that step's machine count and its raw resource consumption.
+    for (const byproducerStep of Object.values(steps)) {
+        for (const out of byproducerStep.outputs) {
+            if (out.itemId === byproducerStep.targetItemId) continue;
+            const byRate = out.ratePerMachine * byproducerStep.machineCount;
+            if (byRate < 1e-6) continue;
+
+            const targetEntry = Object.entries(steps).find(([, s]) => s.targetItemId === out.itemId);
+            if (!targetEntry) continue;
+            const [targetKey, targetStep] = targetEntry;
+
+            const primaryOut = targetStep.outputs.find(o => o.itemId === out.itemId);
+            if (!primaryOut || primaryOut.ratePerMachine <= 0) continue;
+
+            const machineReduction = Math.min(targetStep.machineCount, byRate / primaryOut.ratePerMachine);
+            targetStep.machineCount -= machineReduction;
+
+            // Reduce raw resource inputs for the eliminated machines
+            for (const inp of targetStep.inputs) {
+                const reduction = inp.ratePerMachine * machineReduction;
+                if (rawResources[inp.itemId] !== undefined) {
+                    rawResources[inp.itemId] = Math.max(0, rawResources[inp.itemId] - reduction);
+                    if (rawResources[inp.itemId] < 1e-6) delete rawResources[inp.itemId];
+                }
+                // One level deeper: if that input is itself an intermediate step
+                const subEntry = Object.entries(steps).find(([, s]) => s.targetItemId === inp.itemId);
+                if (subEntry) {
+                    const [subKey, subStep] = subEntry;
+                    const subPrimary = subStep.outputs.find(o => o.itemId === inp.itemId);
+                    if (subPrimary && subPrimary.ratePerMachine > 0) {
+                        const subReduction = reduction / subPrimary.ratePerMachine;
+                        subStep.machineCount = Math.max(0, subStep.machineCount - subReduction);
+                        for (const subInp of subStep.inputs) {
+                            if (rawResources[subInp.itemId] !== undefined) {
+                                rawResources[subInp.itemId] = Math.max(0, rawResources[subInp.itemId] - subInp.ratePerMachine * subReduction);
+                                if (rawResources[subInp.itemId] < 1e-6) delete rawResources[subInp.itemId];
+                            }
+                        }
+                        if (subStep.machineCount < 1e-6) delete steps[subKey];
+                    }
+                }
+            }
+
+            if (targetStep.machineCount < 1e-6) delete steps[targetKey];
+        }
+    }
 
     // Post-process: calculate proper machine counts with clock speeds
     const processedSteps = Object.values(steps).map(step => {

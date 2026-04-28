@@ -223,6 +223,25 @@ async function handleSaveUpload(file) {
                 try { api.updateUnlockedAlternates(result.unlockedAlternates); } catch (e) {}
             }
 
+            // Persist a slim copy so the save survives page reload (drop building
+            // positions; keep the rest. The buildings array can be huge with full data.).
+            try {
+                const slim = {
+                    saveInfo: result.saveInfo,
+                    totalBuildings: result.totalBuildings,
+                    globalBalance: result.globalBalance,
+                    unlockedAlternates: result.unlockedAlternates,
+                    buildings: (result.buildings || []).map(b => ({
+                        buildingId: b.buildingId,
+                        buildingName: b.buildingName,
+                        recipeId: b.recipeId,
+                        clockSpeed: b.clockSpeed,
+                        position: b.position
+                    }))
+                };
+                api.putSaveState(slim);
+            } catch (e) { /* non-fatal */ }
+
             showToast(`Parsed ${result.totalBuildings} buildings, ${result.unlockedAlternates?.length || 0} alternate recipes!`, 'success');
             document.getElementById('page-content').innerHTML = renderSaveFile();
             initSaveFile();

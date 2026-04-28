@@ -1,4 +1,4 @@
-import { getState, fmt, fmtRate, itemIcon, renderProgressBar, computeGlobalBalance } from '../modules/state.js';
+import { getState, fmt, fmtRate, itemIcon, renderProgressBar, renderLimitBar, computeGlobalBalance, RAW_LIMITS, isFluid } from '../modules/state.js';
 
 export function renderDashboard() {
     const { gameData, factories, saveData } = getState();
@@ -19,6 +19,38 @@ export function renderDashboard() {
             };
         })
         .sort((a, b) => a.name.localeCompare(b.name));
+
+    // World Resources: usage vs map-wide extraction limits.
+    // RAW_LIMITS is in m³/min for fluids; balance.consumed is in mL/min (raw recipe units).
+    const limitRows = Object.entries(RAW_LIMITS)
+        .map(([itemId, limit]) => {
+            const item = gameData?.items[itemId];
+            const rawUsed = balance[itemId]?.consumed || 0;
+            // Fluids: convert mL/min → m³/min to match RAW_LIMITS units.
+            const used = isFluid(itemId, gameData) ? rawUsed / 1000 : rawUsed;
+            const pct = (limit === Infinity || !isFinite(limit)) ? -1 : (limit > 0 ? (used / limit) * 100 : 0);
+            return { itemId, name: item?.name || itemId, used, limit, pct };
+        })
+        .sort((a, b) => b.pct - a.pct);
+
+    let limitRowsHtml = '';
+    for (const r of limitRows) {
+        const isInfinite = r.limit === Infinity || !isFinite(r.limit);
+        const fluid = isFluid(r.itemId, gameData);
+        const limitText = isInfinite ? '∞' : `${fmt(r.limit)} ${fluid ? 'm³' : 'items'}/min`;
+        const usedText = `${fmt(r.used)} ${fluid ? 'm³' : 'items'}/min`;
+        const pctText = isInfinite ? '∞' : `${r.pct < 0.05 ? '0' : r.pct.toFixed(r.pct < 10 ? 3 : 2)}%`;
+        limitRowsHtml += `<tr>
+            <td class="rate-cell" style="font-family:var(--font-mono);font-weight:600">${usedText}</td>
+            <td><div class="item-cell">${itemIcon(r.itemId, gameData)}<span>${r.name}</span></div></td>
+            <td>
+                <div style="display:flex;align-items:center;gap:10px">
+                    <div style="flex:1;min-width:140px">${renderLimitBar(r.used, r.limit)}</div>
+                    <span style="font-size:12px;color:var(--text-secondary);white-space:nowrap">${pctText} of limit (${limitText})</span>
+                </div>
+            </td>
+        </tr>`;
+    }
 
     const surplus = balanceList.filter(i => i.net > 0.01).length;
     const deficit = balanceList.filter(i => i.net < -0.01).length;
@@ -77,6 +109,27 @@ export function renderDashboard() {
             <div class="stat-card">
                 <div class="stat-label">Items in Deficit</div>
                 <div class="stat-value deficit">${deficit}</div>
+            </div>
+        </div>
+
+        <div class="card" style="margin-bottom:16px">
+            <div class="card-header">
+                <div>
+                    <div class="card-title">World Resources</div>
+                    <div class="card-subtitle">Map extraction limits and current usage</div>
+                </div>
+            </div>
+            <div class="table-container" style="max-height:40vh;overflow-y:auto">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width:120px">Used</th>
+                            <th style="min-width:200px">Resource</th>
+                            <th>% of Limit</th>
+                        </tr>
+                    </thead>
+                    <tbody>${limitRowsHtml}</tbody>
+                </table>
             </div>
         </div>
 

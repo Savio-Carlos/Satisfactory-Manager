@@ -59,15 +59,17 @@ async function init() {
     content.innerHTML = '<div class="loading-overlay"><div class="loading-spinner"></div>Loading Satisfactory Manager...</div>';
 
     try {
-        const [gameData, factories, unlockedAlternates] = await Promise.all([
+        const [gameData, factories, unlockedAlternates, savedState] = await Promise.all([
             api.getGameData(),
             api.getFactories(),
-            api.getUnlockedAlternates().catch(() => [])
+            api.getUnlockedAlternates().catch(() => []),
+            api.getSaveState().catch(() => null)
         ]);
 
         setState('gameData', gameData);
         setState('factories', factories);
         setState('unlockedAlternates', unlockedAlternates);
+        if (savedState) setState('saveData', savedState);
 
         console.log(`✓ Loaded ${Object.keys(gameData.items).length} items, ${Object.keys(gameData.recipes).length} recipes, ${unlockedAlternates.length} unlocked alternates`);
         navigateTo('dashboard');

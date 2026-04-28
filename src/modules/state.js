@@ -85,6 +85,33 @@ export function renderProgressBar(produced, consumed, itemId) {
     </div>`;
 }
 
+/**
+ * Progress bar styled for "consumed against a hard limit" (e.g. map node caps).
+ * Green below 80%, yellow 80–99%, red at/above 100%.
+ */
+export function renderLimitBar(used, limit) {
+    if (limit === Infinity || !isFinite(limit)) {
+        return `<div style="display:flex;align-items:center;gap:8px;min-width:100px">
+            <div style="flex:1;height:8px;background:var(--bg-input);border-radius:4px;overflow:hidden">
+                <div style="height:100%;width:100%;background:var(--accent-blue)"></div>
+            </div>
+            <span style="font-size:12px;color:var(--text-secondary);width:46px;text-align:right">∞</span>
+        </div>`;
+    }
+    if (!limit || limit <= 0) {
+        return `<span style="font-size:12px;color:var(--text-muted)">-</span>`;
+    }
+    const pct = (used / limit) * 100;
+    const visualPct = Math.min(100, Math.max(0, pct));
+    const color = pct >= 100 ? 'var(--color-deficit)' : (pct >= 80 ? 'var(--color-balanced)' : 'var(--color-surplus)');
+    return `<div style="display:flex;align-items:center;gap:8px;min-width:100px">
+        <div style="flex:1;height:8px;background:var(--bg-input);border-radius:4px;overflow:hidden">
+            <div style="height:100%;width:${visualPct}%;background:${color};transition:width 0.3s ease"></div>
+        </div>
+        <span style="font-size:12px;color:${color};width:54px;text-align:right;font-family:var(--font-mono)">${pct < 0.05 ? '0' : pct.toFixed(pct < 10 ? 2 : 1)}%</span>
+    </div>`;
+}
+
 export function showModal(html) {
     document.getElementById('modal-container').innerHTML = html;
     document.getElementById('modal-overlay').classList.remove('hidden');
