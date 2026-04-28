@@ -275,19 +275,18 @@ function renderFactoryDetail() {
             
             let sourcedToggle = '';
             let sourcedBadge = '';
-            if (net < -0.01) {
-                const isSourced = factory.sourcedInputs && factory.sourcedInputs.includes(itemId);
-                if (isSourced) {
-                    sourcedBadge = `<span style="font-size:10px;padding:2px 6px;background:var(--accent-blue-dim);color:var(--accent-blue);border-radius:4px;margin-left:8px;white-space:nowrap">Globally Sourced</span>`;
-                }
-                sourcedToggle = `
-                <div style="display:flex;justify-content:center">
-                    <label class="toggle-switch" style="transform:scale(0.8)">
-                        <input type="checkbox" class="source-toggle" data-item="${itemId}" ${isSourced ? 'checked' : ''}>
-                        <span class="slider"></span>
-                    </label>
-                </div>`;
+            
+            const isSourced = factory.sourcedInputs && factory.sourcedInputs.includes(itemId);
+            if (isSourced) {
+                sourcedBadge = `<span style="font-size:10px;padding:2px 6px;background:var(--accent-blue-dim);color:var(--accent-blue);border-radius:4px;margin-left:8px;white-space:nowrap">Globally Sourced</span>`;
             }
+            sourcedToggle = `
+            <div style="display:flex;justify-content:center">
+                <label class="toggle-switch" style="transform:scale(0.8)">
+                    <input type="checkbox" class="source-toggle" data-item="${itemId}" ${isSourced ? 'checked' : ''}>
+                    <span class="slider"></span>
+                </label>
+            </div>`;
             
             rows += `<tr>
                 <td><div class="item-cell">${itemIcon(itemId, gameData)}<span>${item?.name || itemId}</span>${sourcedBadge}</div></td>

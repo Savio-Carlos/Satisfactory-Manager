@@ -1,4 +1,4 @@
-import { getState, setState, showToast, fmt, fmtRate, itemIcon, buildingIcon } from '../modules/state.js';
+import { getState, setState, showToast, fmt, fmtRate, itemIcon, buildingIcon, computeGlobalBalance } from '../modules/state.js';
 import { api } from '../modules/api.js';
 import { renderFlowchart, initFlowchart } from './flowchart.js';
 import { showAddFactoryModal } from './factories.js';
@@ -104,7 +104,7 @@ function renderProductionTab(gameData, hasResult) {
     const inputRows = plannerState.inputs.map((inp, idx) => {
         const item = gameData.items[inp.itemId];
         return `<div class="target-row" style="display:flex;gap:12px;margin-bottom:8px;align-items:center">
-            <div class="input-group" style="margin:0;flex:1">
+            <div class="input-group" style="margin:0;flex:2">
                 <div style="display:flex;align-items:center;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:0 8px">
                     ${item ? itemIcon(inp.itemId, gameData, 20) : ''}
                     <select class="input-item-select" data-idx="${idx}" style="border:none;background:transparent;flex:1;outline:none;padding-left:8px">
@@ -113,7 +113,10 @@ function renderProductionTab(gameData, hasResult) {
                     </select>
                 </div>
             </div>
-            <div style="color:var(--text-secondary);font-size:13px;flex:1"><span style="padding:2px 6px;background:var(--accent-blue-dim);color:var(--accent-blue);border-radius:4px;font-size:11px">Globally Sourced</span></div>
+            <div class="input-group" style="margin:0;flex:1;max-width:150px">
+                <input type="number" class="input-rate-input" data-idx="${idx}" value="${inp.rate || 0}" min="0.1" step="0.1" style="border-radius:var(--radius-sm)" />
+            </div>
+            <div style="color:var(--text-secondary);font-size:13px;width:60px">items/min</div>
             <button class="btn btn-ghost btn-sm btn-remove-input" data-idx="${idx}" style="color:var(--accent-red);padding:0 12px;height:38px">✕</button>
         </div>`;
     }).join('');
@@ -373,7 +376,12 @@ export function initPlanner() {
         if (plannerState.inputs.find(i => i.itemId === selectedInputId)) {
             showToast('Input already added', 'error'); return;
         }
-        plannerState.inputs.push({ itemId: selectedInputId });
+        
+        const globalBalance = computeGlobalBalance();
+        const b = globalBalance[selectedInputId];
+        const surplus = b && (b.produced - b.consumed) > 0 ? (b.produced - b.consumed) : 0;
+        
+        plannerState.inputs.push({ itemId: selectedInputId, rate: surplus > 0 ? surplus : 10 });
         plannerState.result = null;
         rerender();
     });
@@ -395,6 +403,16 @@ export function initPlanner() {
             if (val) {
                 plannerState.inputs[idx].itemId = val;
                 plannerState.result = null;
+            }
+        });
+    });
+
+    document.querySelectorAll('.input-rate-input').forEach(input => {
+        input.addEventListener('change', (e) => {
+            const idx = parseInt(e.target.dataset.idx);
+            const val = parseFloat(e.target.value);
+            if (val > 0) {
+                plannerState.inputs[idx].rate = val;
             }
         });
     });
@@ -429,14 +447,10 @@ export function initPlanner() {
         btn.innerHTML = '<div class="loading-spinner" style="width:14px;height:14px;border-width:2px"></div>';
 
         try {
-            // Compute global surplus for available inputs
-            const { computeGlobalBalance } = await import('../modules/state.js');
-            const globalBalance = computeGlobalBalance();
             const availableInputs = {};
             for (const inp of plannerState.inputs) {
-                const b = globalBalance[inp.itemId];
-                if (b && (b.produced - b.consumed) > 0) {
-                    availableInputs[inp.itemId] = b.produced - b.consumed;
+                if (inp.rate > 0) {
+                    availableInputs[inp.itemId] = inp.rate;
                 }
             }
 
