@@ -157,7 +157,56 @@ export function buildingIcon(buildingId, gameData, size = 28) {
 }
 
 /**
- * Compute global balance from user factories and save data
+ * Resolve the sourced rate (items/min drawn from global storage) for a given item
+ * in a factory. Supports both the legacy `string[]` shape (full consumption sourced
+ * for each listed item) and the current `Record<itemId, rate>` shape.
+ */
+export function getSourcedRate(factory, itemId, localConsumedRate) {
+    const s = factory?.sourcedInputs;
+    if (!s) return 0;
+    if (Array.isArray(s)) {
+        return s.includes(itemId) ? localConsumedRate : 0;
+    }
+    if (typeof s === 'object') {
+        const r = Number(s[itemId]) || 0;
+        return r > 0 ? r : 0;
+    }
+    return 0;
+}
+
+/**
+ * Compute the local I/O of a single factory (consumption and production per item)
+ * from its building list. Used by both the dashboard balance and the factory view.
+ */
+export function computeFactoryLocalIO(factory, gameData) {
+    const local = {};
+    for (const bld of (factory.buildings || [])) {
+        if (!bld.recipeId || !gameData?.recipes[bld.recipeId]) continue;
+        const recipe = gameData.recipes[bld.recipeId];
+        const cyclesPerMin = recipe.manufacturingDuration > 0 ? 60 / recipe.manufacturingDuration : 0;
+        const clock = (bld.clockSpeed || 100) / 100;
+        const count = bld.count || 1;
+
+        for (const ing of recipe.ingredients) {
+            if (!local[ing.itemId]) local[ing.itemId] = { produced: 0, consumed: 0 };
+            local[ing.itemId].consumed += ing.amount * cyclesPerMin * clock * count;
+        }
+        for (const prod of recipe.products) {
+            if (!local[prod.itemId]) local[prod.itemId] = { produced: 0, consumed: 0 };
+            local[prod.itemId].produced += prod.amount * cyclesPerMin * clock * count;
+        }
+    }
+    return local;
+}
+
+/**
+ * Compute global balance from user factories and save data.
+ *
+ * Sourcing model: when a factory marks an item as globally sourced at rate `S`,
+ * the factory drains S/min from global storage. Local production only needs to
+ * cover the remaining (consumption - S). Any local surplus over that is exported
+ * to global. If S exceeds what's globally available, the dashboard will go red —
+ * surfacing the shortfall so the user can rebalance.
  */
 export function computeGlobalBalance(customFactories = null, includeSaveData = true) {
     const { gameData, factories, saveData } = getState();
@@ -167,38 +216,23 @@ export function computeGlobalBalance(customFactories = null, includeSaveData = t
     for (const factory of targetFactories) {
         if (includeSaveData && factory.countedInSave && saveData) continue;
 
-        const local = {};
-        for (const bld of (factory.buildings || [])) {
-            if (!bld.recipeId || !gameData?.recipes[bld.recipeId]) continue;
-            const recipe = gameData.recipes[bld.recipeId];
-            const cyclesPerMin = recipe.manufacturingDuration > 0 ? 60 / recipe.manufacturingDuration : 0;
-            const clock = (bld.clockSpeed || 100) / 100;
-            const count = bld.count || 1;
-
-            for (const ing of recipe.ingredients) {
-                if (!local[ing.itemId]) local[ing.itemId] = { produced: 0, consumed: 0 };
-                local[ing.itemId].consumed += ing.amount * cyclesPerMin * clock * count;
-            }
-            for (const prod of recipe.products) {
-                if (!local[prod.itemId]) local[prod.itemId] = { produced: 0, consumed: 0 };
-                local[prod.itemId].produced += prod.amount * cyclesPerMin * clock * count;
-            }
-        }
+        const local = computeFactoryLocalIO(factory, gameData);
 
         for (const [itemId, b] of Object.entries(local)) {
             if (!balance[itemId]) balance[itemId] = { produced: 0, consumed: 0 };
-            
-            const net = b.produced - b.consumed;
-            const isSourced = factory.sourcedInputs && factory.sourcedInputs.includes(itemId);
-            
-            if (net > 0) {
+
+            const sourced = Math.min(getSourcedRate(factory, itemId, b.consumed), b.consumed);
+
+            // Sourced amount always drains global storage. Overshoot just turns the dashboard red.
+            balance[itemId].consumed += sourced;
+
+            // Local production must cover the unsourced portion of consumption.
+            const effectiveConsumption = b.consumed - sourced;
+            const net = b.produced - effectiveConsumption;
+            if (net > 0.001) {
                 balance[itemId].produced += net;
-            } else if (net < -0.001) {
-                // Only drain from global grid if explicitly sourced!
-                if (isSourced) {
-                    balance[itemId].consumed += Math.abs(net);
-                }
             }
+            // net < 0 is a factory-internal deficit; shown on the factory view, not drained from global.
         }
     }
 

@@ -35,6 +35,8 @@ let pan = { x: 50, y: 50 };
 let zoom = 1;
 let imageCache = new Map();
 let hoveredNode = null;
+let currentResizeHandler = null;
+let redrawScheduled = false;
 
 export function renderFlowchart() { return ''; }
 
@@ -57,28 +59,68 @@ export function initFlowchart(result, gameData) {
     imageCache = new Map();
     pan = { x: 50, y: 50 };
     zoom = 1;
+    dragNode = null;
+    dragOffset = { x: 0, y: 0 };
+    hoveredNode = null;
 
+    const ctx = canvas.getContext('2d');
     const dpr = window.devicePixelRatio || 1;
+
+    buildGraph(result, gameData);
+    layoutGraph();
+
+    const requestRedraw = () => {
+        if (redrawScheduled) return;
+        redrawScheduled = true;
+        requestAnimationFrame(() => {
+            redrawScheduled = false;
+            draw(ctx, canvas, dpr, gameData);
+        });
+    };
+    preloadImages(requestRedraw);
+
     const resize = () => {
         canvas.width = canvas.offsetWidth * dpr;
         canvas.height = canvas.offsetHeight * dpr;
         draw(ctx, canvas, dpr, gameData);
     };
+    if (currentResizeHandler) window.removeEventListener('resize', currentResizeHandler);
+    currentResizeHandler = resize;
     window.addEventListener('resize', resize);
     resize();
-    const ctx = canvas.getContext('2d');
 
-    buildGraph(result, gameData);
-    layoutGraph();
+    const nodeAt = (graphX, graphY) => {
+        for (const node of nodes) {
+            const nw = node.type === 'recipe' || node.type === 'output' ? NODE_W : RAW_W;
+            const nh = node.type === 'recipe' || node.type === 'output' ? NODE_H : RAW_H;
+            if (graphX >= node.x && graphX <= node.x + nw && graphY >= node.y && graphY <= node.y + nh) {
+                return node;
+            }
+        }
+        return null;
+    };
 
     // Mouse events
     canvas.addEventListener('mousedown', (e) => {
         const rect = canvas.getBoundingClientRect();
         const mx = e.clientX - rect.left;
         const my = e.clientY - rect.top;
-        isDragging = true;
+        const graphX = (mx - pan.x) / zoom;
+        const graphY = (my - pan.y) / zoom;
+
+        const hit = nodeAt(graphX, graphY);
+        if (hit) {
+            // Drag the node (graph-space)
+            dragNode = hit;
+            dragOffset = { x: graphX - hit.x, y: graphY - hit.y };
+            canvas.style.cursor = 'grabbing';
+            tooltipDiv.style.display = 'none';
+        } else {
+            // Pan the canvas (screen-space)
+            isDragging = true;
+            canvas.style.cursor = 'grabbing';
+        }
         lastMouse = { x: mx, y: my };
-        canvas.style.cursor = 'grabbing';
     });
 
     canvas.addEventListener('mousemove', (e) => {
@@ -86,22 +128,20 @@ export function initFlowchart(result, gameData) {
         const mx = e.clientX - rect.left;
         const my = e.clientY - rect.top;
 
-        if (isDragging) {
+        if (dragNode) {
+            const graphX = (mx - pan.x) / zoom;
+            const graphY = (my - pan.y) / zoom;
+            dragNode.x = graphX - dragOffset.x;
+            dragNode.y = graphY - dragOffset.y;
+            draw(ctx, canvas, dpr, gameData);
+        } else if (isDragging) {
             pan.x += mx - lastMouse.x;
             pan.y += my - lastMouse.y;
             draw(ctx, canvas, dpr, gameData);
         } else {
             const graphX = (mx - pan.x) / zoom;
             const graphY = (my - pan.y) / zoom;
-            let found = null;
-            for (const node of nodes) {
-                const nw = node.type === 'recipe' || node.type === 'output' ? NODE_W : RAW_W;
-                const nh = node.type === 'recipe' || node.type === 'output' ? NODE_H : RAW_H;
-                if (graphX >= node.x && graphX <= node.x + nw && graphY >= node.y && graphY <= node.y + nh) {
-                    found = node;
-                    break;
-                }
-            }
+            const found = nodeAt(graphX, graphY);
             if (found !== hoveredNode) {
                 hoveredNode = found;
                 if (hoveredNode) {
@@ -118,11 +158,16 @@ export function initFlowchart(result, gameData) {
         lastMouse = { x: mx, y: my };
     });
 
-    canvas.addEventListener('mouseup', () => { isDragging = false; canvas.style.cursor = 'grab'; });
-    canvas.addEventListener('mouseleave', () => { 
-        isDragging = false; 
+    canvas.addEventListener('mouseup', () => {
+        dragNode = null;
+        isDragging = false;
+        canvas.style.cursor = 'grab';
+    });
+    canvas.addEventListener('mouseleave', () => {
+        dragNode = null;
+        isDragging = false;
         if (hoveredNode) { hoveredNode = null; tooltipDiv.style.display = 'none'; draw(ctx, canvas, dpr, gameData); }
-        canvas.style.cursor = 'grab'; 
+        canvas.style.cursor = 'grab';
     });
 
     function showTooltip(node, x, y) {
@@ -205,16 +250,24 @@ function buildGraph(result, gameData) {
         });
     }
 
-    const targetItem = gameData.items[result.targetItemId];
-    nodes.push({
-        id: 'output__' + result.targetItemId,
-        type: 'output',
-        label1: targetItem?.name || result.targetItemId,
-        label2: fmtRate(result.targetRate, result.targetItemId, gameData),
-        itemImg: targetItem?.image ? getImageUrl(targetItem.image) : null,
-        tooltipData: { machines: false, inputs: [{ name: targetItem?.name || result.targetItemId, rate: result.targetRate.toFixed(3) }] },
-        x: 0, y: 0
-    });
+    // Support multi-target plans. Fall back to single-target shape for older callers.
+    const targets = result.targets && result.targets.length > 0
+        ? result.targets
+        : [{ itemId: result.targetItemId, rate: result.targetRate }];
+    const targetMap = new Map(targets.map(t => [t.itemId, t.rate]));
+
+    for (const t of targets) {
+        const targetItem = gameData.items[t.itemId];
+        nodes.push({
+            id: 'output__' + t.itemId,
+            type: 'output',
+            label1: targetItem?.name || t.itemId,
+            label2: fmtRate(t.rate, t.itemId, gameData),
+            itemImg: targetItem?.image ? getImageUrl(targetItem.image) : null,
+            tooltipData: { machines: false, inputs: [{ name: targetItem?.name || t.itemId, rate: t.rate.toFixed(3) }] },
+            x: 0, y: 0
+        });
+    }
 
     for (const step of result.steps) {
         const stepNode = stepNodes.get(step.recipeId + '__' + step.targetItemId);
@@ -234,16 +287,18 @@ function buildGraph(result, gameData) {
                 });
             }
         }
-        if (step.targetItemId === result.targetItemId) {
+        if (targetMap.has(step.targetItemId)) {
+            const rate = targetMap.get(step.targetItemId);
+            const targetItem = gameData.items[step.targetItemId];
             edges.push({
-                from: stepNode.id, to: 'output__' + result.targetItemId,
-                label: fmtRate(result.targetRate, result.targetItemId, gameData),
-                itemName: targetItem?.name || result.targetItemId,
+                from: stepNode.id, to: 'output__' + step.targetItemId,
+                label: fmtRate(rate, step.targetItemId, gameData),
+                itemName: targetItem?.name || step.targetItemId,
                 itemImg: targetItem?.image ? getImageUrl(targetItem.image) : null
             });
         }
         for (const out of step.outputs) {
-            if (out.itemId === result.targetItemId) continue;
+            if (targetMap.has(out.itemId)) continue;
             for (const cs of result.steps) {
                 if (cs === step) continue;
                 if (cs.inputs.find(i => i.itemId === out.itemId)) {
@@ -263,18 +318,19 @@ function buildGraph(result, gameData) {
         }
     }
 
-    // Direct edge from raw to output if no step produced it
-    if (result.rawResources && result.rawResources[result.targetItemId]) {
-        const stepProduced = result.steps.some(s => s.targetItemId === result.targetItemId);
-        if (!stepProduced) {
-            edges.push({
-                from: 'raw__' + result.targetItemId,
-                to: 'output__' + result.targetItemId,
-                label: fmtRate(result.rawResources[result.targetItemId], result.targetItemId, gameData),
-                itemName: targetItem?.name || result.targetItemId,
-                itemImg: targetItem?.image ? getImageUrl(targetItem.image) : null
-            });
-        }
+    // Direct edge from raw to output for any target with no producing step (e.g. target IS a raw resource)
+    for (const t of targets) {
+        if (!result.rawResources || !result.rawResources[t.itemId]) continue;
+        const stepProduced = result.steps.some(s => s.targetItemId === t.itemId);
+        if (stepProduced) continue;
+        const targetItem = gameData.items[t.itemId];
+        edges.push({
+            from: 'raw__' + t.itemId,
+            to: 'output__' + t.itemId,
+            label: fmtRate(t.rate, t.itemId, gameData),
+            itemName: targetItem?.name || t.itemId,
+            itemImg: targetItem?.image ? getImageUrl(targetItem.image) : null
+        });
     }
 }
 
@@ -342,64 +398,77 @@ function draw(ctx, canvas, dpr, gameData) {
     ctx.translate(pan.x, pan.y);
     ctx.scale(zoom, zoom);
 
-    // Group backwards edges to calculate proper bottom offsets
-    const backwardsEdges = edges.filter(e => {
-        const f = nodes.find(n => n.id === e.from);
-        const t = nodes.find(n => n.id === e.to);
-        return f && t && (f.x >= t.x);
-    });    // Edges
+    // Classify edges. A "backward" edge is a cycle: target's left edge is at or
+    // before source's right edge, so a straight diagonal would overlap nodes.
+    const isBackward = (edge) => {
+        const f = nodes.find(n => n.id === edge.from);
+        const t = nodes.find(n => n.id === edge.to);
+        if (!f || !t) return false;
+        const fW = f.type === 'recipe' || f.type === 'output' ? NODE_W : RAW_W;
+        return (f.x + fW) >= t.x;
+    };
+    const backwardsEdges = edges.filter(isBackward);
+
     for (const edge of edges) {
         const fromNode = nodes.find(n => n.id === edge.from);
         const toNode = nodes.find(n => n.id === edge.to);
         if (!fromNode || !toNode) continue;
         const fromW = fromNode.type === 'recipe' || fromNode.type === 'output' ? NODE_W : RAW_W;
         const fromH = fromNode.type === 'recipe' || fromNode.type === 'output' ? NODE_H : RAW_H;
+        const toW = toNode.type === 'recipe' || toNode.type === 'output' ? NODE_W : RAW_W;
         const toH = toNode.type === 'recipe' || toNode.type === 'output' ? NODE_H : RAW_H;
-        const x1 = fromNode.x + fromW;
-        const y1 = fromNode.y + fromH / 2;
-        const x2 = toNode.x;
-        const y2 = toNode.y + toH / 2;
 
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        
-        let midX, midY;
-        
-        // Cycle routing (backwards edge) - Circular/Bezier sweeping arc
-        if (x1 >= x2) {
+        let x1, y1, x2, y2, midX, midY, tanX, tanY;
+
+        if (isBackward(edge)) {
+            // Cycle: exit source's BOTTOM, enter target's BOTTOM. Avoids the right side.
+            x1 = fromNode.x + fromW / 2;
+            y1 = fromNode.y + fromH;
+            x2 = toNode.x + toW / 2;
+            y2 = toNode.y + toH;
+
             const edgeIndex = backwardsEdges.indexOf(edge);
-            const bottomY = Math.max(y1, y2) + 80 + (edgeIndex * 40); // Offset each edge so they don't overlap
-            
-            ctx.bezierCurveTo(x1 + 60, y1, x1 + 60, bottomY, (x1 + x2) / 2, bottomY);
-            ctx.bezierCurveTo(x2 - 60, bottomY, x2 - 60, y2, x2, y2);
-            
+            const bottomY = Math.max(y1, y2) + 70 + (edgeIndex * 36);
+            const c1x = x1, c1y = bottomY;
+            const c2x = x2, c2y = bottomY;
+
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.bezierCurveTo(c1x, c1y, c2x, c2y, x2, y2);
+
             midX = (x1 + x2) / 2;
             midY = bottomY;
+            // Tangent at end of cubic bezier = end - lastControl
+            tanX = x2 - c2x;
+            tanY = y2 - c2y;
         } else {
-            // Forward edge - Direct straight line
+            // Forward edge: source.right-center → target.left-center, straight diagonal.
+            x1 = fromNode.x + fromW;
+            y1 = fromNode.y + fromH / 2;
+            x2 = toNode.x;
+            y2 = toNode.y + toH / 2;
+
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
             ctx.lineTo(x2, y2);
+
             midX = (x1 + x2) / 2;
             midY = (y1 + y2) / 2;
+            tanX = x2 - x1;
+            tanY = y2 - y1;
         }
 
         ctx.strokeStyle = COLORS.edge;
         ctx.lineWidth = 1.5;
         ctx.stroke();
 
-        // Arrow
-        ctx.beginPath();
-        ctx.moveTo(x2, y2);
-        ctx.lineTo(x2 - 8, y2 - 4);
-        ctx.lineTo(x2 - 8, y2 + 4);
-        ctx.closePath();
-        ctx.fillStyle = COLORS.edge;
-        ctx.fill();
+        // Arrow at target endpoint, oriented along edge tangent.
+        drawArrow(ctx, x2, y2, tanX, tanY);
 
         // Edge label with item icon
-        // Draw item icon on edge
-        if (edge.itemImg && imageCache.has(edge.itemImg)) {
+        if (edge.itemImg) {
             const img = imageCache.get(edge.itemImg);
-            ctx.drawImage(img, midX - 10, midY - 24, 20, 20);
+            if (img) ctx.drawImage(img, midX - 10, midY - 24, 20, 20);
         }
 
         ctx.font = '600 13px Inter, sans-serif';
@@ -433,10 +502,12 @@ function draw(ctx, canvas, dpr, gameData) {
 
         // Building/item icon inside node
         const iconUrl = node.buildingImg || node.itemImg;
-        if (iconUrl && imageCache.has(iconUrl)) {
+        if (iconUrl) {
             const img = imageCache.get(iconUrl);
-            const iconSize = isRecipe ? 28 : 22;
-            ctx.drawImage(img, node.x + 8, node.y + (nh - iconSize) / 2, iconSize, iconSize);
+            if (img) {
+                const iconSize = isRecipe ? 28 : 22;
+                ctx.drawImage(img, node.x + 8, node.y + (nh - iconSize) / 2, iconSize, iconSize);
+            }
         }
 
         const textX = iconUrl ? node.x + 42 : node.x + nw / 2;
@@ -471,4 +542,47 @@ function roundRect(ctx, x, y, w, h, r) {
 function truncate(str, len) {
     if (!str) return '';
     return str.length > len ? str.slice(0, len - 1) + '…' : str;
+}
+
+function drawArrow(ctx, tipX, tipY, tanX, tanY) {
+    const mag = Math.hypot(tanX, tanY) || 1;
+    const ux = tanX / mag;
+    const uy = tanY / mag;
+    const len = 12;
+    const halfW = 5;
+    const px = -uy;
+    const py = ux;
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(tipX - ux * len + px * halfW, tipY - uy * len + py * halfW);
+    ctx.lineTo(tipX - ux * len - px * halfW, tipY - uy * len - py * halfW);
+    ctx.closePath();
+    ctx.fillStyle = COLORS.edge;
+    ctx.fill();
+}
+
+function preloadImages(onImageReady) {
+    const urls = new Set();
+    for (const node of nodes) {
+        if (node.buildingImg) urls.add(node.buildingImg);
+        if (node.itemImg) urls.add(node.itemImg);
+    }
+    for (const edge of edges) {
+        if (edge.itemImg) urls.add(edge.itemImg);
+    }
+
+    for (const url of urls) {
+        if (imageCache.has(url)) continue;
+        // Mark as in-flight so we don't double-load
+        imageCache.set(url, null);
+        const img = new Image();
+        img.onload = () => {
+            imageCache.set(url, img);
+            onImageReady();
+        };
+        img.onerror = () => {
+            imageCache.set(url, null);
+        };
+        img.src = url;
+    }
 }

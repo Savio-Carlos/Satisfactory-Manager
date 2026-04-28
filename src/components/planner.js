@@ -457,10 +457,19 @@ export function initPlanner() {
                 }
             }
 
-            // Calculate for each target and merge
+            // Calculate for each target and merge.
+            // We pass a fresh copy of availableInputs each call and decrement our
+            // local pool by what the server reported as raw (for sourced items),
+            // so multi-target plans don't double-spend the global surplus.
+            const remainingInputs = { ...availableInputs };
             let merged = null;
             for (const t of plannerState.targets) {
-                const result = await api.calculate(t.itemId, t.rate, { ...overrides, ...t.recipeOverrides }, availableInputs);
+                const result = await api.calculate(t.itemId, t.rate, { ...overrides, ...t.recipeOverrides }, { ...remainingInputs });
+                // Decrement remaining inputs by raw resources consumed for items in our pool
+                for (const itemId of Object.keys(remainingInputs)) {
+                    const used = result.rawResources?.[itemId] || 0;
+                    remainingInputs[itemId] = Math.max(0, remainingInputs[itemId] - used);
+                }
                 if (!merged) { merged = result; }
                 else {
                     // Merge steps
@@ -481,6 +490,9 @@ export function initPlanner() {
                     merged.totalPower += result.totalPower;
                     merged.totalMachines = merged.steps.reduce((sum, s) => sum + s.machineCount, 0);
                 }
+            }
+            if (merged) {
+                merged.targets = plannerState.targets.map(t => ({ itemId: t.itemId, rate: t.rate }));
             }
             plannerState.result = merged;
             plannerState.activeTab = 'production';
