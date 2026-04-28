@@ -59,17 +59,37 @@ export function initFlowchart(result, gameData) {
     zoom = 1;
 
     const dpr = window.devicePixelRatio || 1;
+    const ctx = canvas.getContext('2d');
+
     const resize = () => {
         canvas.width = canvas.offsetWidth * dpr;
         canvas.height = canvas.offsetHeight * dpr;
         draw(ctx, canvas, dpr, gameData);
     };
     window.addEventListener('resize', resize);
-    resize();
-    const ctx = canvas.getContext('2d');
 
     buildGraph(result, gameData);
     layoutGraph();
+    resize();
+
+    // Preload all node/edge images then redraw once they arrive
+    const allUrls = new Set();
+    for (const node of nodes) {
+        const url = node.buildingImg || node.itemImg;
+        if (url) allUrls.add(url);
+    }
+    for (const edge of edges) {
+        if (edge.itemImg) allUrls.add(edge.itemImg);
+    }
+    let pending = allUrls.size;
+    if (pending > 0) {
+        for (const url of allUrls) {
+            const img = new Image();
+            img.onload = () => { imageCache.set(url, img); if (--pending === 0) draw(ctx, canvas, dpr, gameData); };
+            img.onerror = () => { if (--pending === 0) draw(ctx, canvas, dpr, gameData); };
+            img.src = url;
+        }
+    }
 
     // Mouse events
     canvas.addEventListener('mousedown', (e) => {
