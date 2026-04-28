@@ -262,6 +262,20 @@ function buildGraph(result, gameData) {
             }
         }
     }
+
+    // Direct edge from raw to output if no step produced it
+    if (result.rawResources && result.rawResources[result.targetItemId]) {
+        const stepProduced = result.steps.some(s => s.targetItemId === result.targetItemId);
+        if (!stepProduced) {
+            edges.push({
+                from: 'raw__' + result.targetItemId,
+                to: 'output__' + result.targetItemId,
+                label: fmtRate(result.rawResources[result.targetItemId], result.targetItemId, gameData),
+                itemName: targetItem?.name || result.targetItemId,
+                itemImg: targetItem?.image ? getImageUrl(targetItem.image) : null
+            });
+        }
+    }
 }
 
 function findStepProducing(itemId, steps, stepNodes) {

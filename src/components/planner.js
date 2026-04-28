@@ -15,7 +15,10 @@ export function renderPlanner() {
     const { gameData } = getState();
     if (!gameData) return '<div class="loading-overlay"><div class="loading-spinner"></div>Loading game data...</div>';
 
-    const hasResult = !!plannerState.result;
+    const hasResult = plannerState.result && (
+        (plannerState.result.steps && plannerState.result.steps.length > 0) ||
+        (plannerState.result.rawResources && Object.keys(plannerState.result.rawResources).length > 0)
+    );
     const tab = plannerState.activeTab;
 
     // Visualization fullscreen

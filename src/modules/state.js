@@ -167,6 +167,7 @@ export function computeGlobalBalance(customFactories = null, includeSaveData = t
     for (const factory of targetFactories) {
         if (includeSaveData && factory.countedInSave && saveData) continue;
 
+        const local = {};
         for (const bld of (factory.buildings || [])) {
             if (!bld.recipeId || !gameData?.recipes[bld.recipeId]) continue;
             const recipe = gameData.recipes[bld.recipeId];
@@ -175,12 +176,28 @@ export function computeGlobalBalance(customFactories = null, includeSaveData = t
             const count = bld.count || 1;
 
             for (const ing of recipe.ingredients) {
-                if (!balance[ing.itemId]) balance[ing.itemId] = { produced: 0, consumed: 0 };
-                balance[ing.itemId].consumed += ing.amount * cyclesPerMin * clock * count;
+                if (!local[ing.itemId]) local[ing.itemId] = { produced: 0, consumed: 0 };
+                local[ing.itemId].consumed += ing.amount * cyclesPerMin * clock * count;
             }
             for (const prod of recipe.products) {
-                if (!balance[prod.itemId]) balance[prod.itemId] = { produced: 0, consumed: 0 };
-                balance[prod.itemId].produced += prod.amount * cyclesPerMin * clock * count;
+                if (!local[prod.itemId]) local[prod.itemId] = { produced: 0, consumed: 0 };
+                local[prod.itemId].produced += prod.amount * cyclesPerMin * clock * count;
+            }
+        }
+
+        for (const [itemId, b] of Object.entries(local)) {
+            if (!balance[itemId]) balance[itemId] = { produced: 0, consumed: 0 };
+            
+            const net = b.produced - b.consumed;
+            const isSourced = factory.sourcedInputs && factory.sourcedInputs.includes(itemId);
+            
+            if (net > 0) {
+                balance[itemId].produced += net;
+            } else if (net < -0.001) {
+                // Only drain from global grid if explicitly sourced!
+                if (isSourced) {
+                    balance[itemId].consumed += Math.abs(net);
+                }
             }
         }
     }
