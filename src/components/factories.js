@@ -1,4 +1,4 @@
-import { getState, setState, showToast, showModal, hideModal, fmt, fmtRate, itemIcon, buildingIcon, renderProgressBar } from '../modules/state.js';
+import { getState, setState, showToast, showModal, hideModal, fmt, fmtRate, itemIcon, buildingIcon, renderProgressBar, computeGlobalBalance } from '../modules/state.js';
 import { api } from '../modules/api.js';
 import { initFlowchart } from './flowchart.js';
 
@@ -313,8 +313,8 @@ function renderFactoryDetail() {
     }
     else if (activeTab === 'grid') {
         // Calculate global balance excluding this factory (to see impact)
-        const globalBalance = computeGlobalBalance(gameData, factories);
-        const thisFactoryImpact = computeGlobalBalance(gameData, [factory]);
+        const globalBalance = computeGlobalBalance(); // uses all factories
+        const thisFactoryImpact = computeGlobalBalance([factory], false); // only this factory, no save data
         
         let rows = '';
         for (const [itemId, impact] of Object.entries(thisFactoryImpact)) {
@@ -368,28 +368,6 @@ function renderFactoryDetail() {
     </div>`;
 }
 
-function computeGlobalBalance(gameData, factories) {
-    const balance = {};
-    for (const factory of factories) {
-        for (const bld of (factory.buildings || [])) {
-            if (!bld.recipeId || !gameData?.recipes[bld.recipeId]) continue;
-            const recipe = gameData.recipes[bld.recipeId];
-            const cyclesPerMin = recipe.manufacturingDuration > 0 ? 60 / recipe.manufacturingDuration : 0;
-            const clock = (bld.clockSpeed || 100) / 100;
-            const count = bld.count || 1;
-
-            for (const ing of recipe.ingredients) {
-                if (!balance[ing.itemId]) balance[ing.itemId] = { produced: 0, consumed: 0 };
-                balance[ing.itemId].consumed += ing.amount * cyclesPerMin * clock * count;
-            }
-            for (const prod of recipe.products) {
-                if (!balance[prod.itemId]) balance[prod.itemId] = { produced: 0, consumed: 0 };
-                balance[prod.itemId].produced += prod.amount * cyclesPerMin * clock * count;
-            }
-        }
-    }
-    return balance;
-}
 
 export function initFactories() {
     if (activeFactoryId) {

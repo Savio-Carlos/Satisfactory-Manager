@@ -5,6 +5,7 @@ import { showAddFactoryModal } from './factories.js';
 
 let plannerState = {
     targets: [],          // [{itemId, rate, recipeOverrides:{}}]
+    inputs: [],           // [{itemId}]
     result: null,
     activeTab: 'production',
     vizFullscreen: false
@@ -100,6 +101,23 @@ function renderProductionTab(gameData, hasResult) {
         </div>`;
     }).join('');
 
+    const inputRows = plannerState.inputs.map((inp, idx) => {
+        const item = gameData.items[inp.itemId];
+        return `<div class="target-row" style="display:flex;gap:12px;margin-bottom:8px;align-items:center">
+            <div class="input-group" style="margin:0;flex:1">
+                <div style="display:flex;align-items:center;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:0 8px">
+                    ${item ? itemIcon(inp.itemId, gameData, 20) : ''}
+                    <select class="input-item-select" data-idx="${idx}" style="border:none;background:transparent;flex:1;outline:none;padding-left:8px">
+                        <option value="">Select item...</option>
+                        ${producibleItems.map(i => `<option value="${i.id}" ${i.id === inp.itemId ? 'selected' : ''}>${i.name}</option>`).join('')}
+                    </select>
+                </div>
+            </div>
+            <div style="color:var(--text-secondary);font-size:13px;flex:1"><span style="padding:2px 6px;background:var(--accent-blue-dim);color:var(--accent-blue);border-radius:4px;font-size:11px">Globally Sourced</span></div>
+            <button class="btn btn-ghost btn-sm btn-remove-input" data-idx="${idx}" style="color:var(--accent-red);padding:0 12px;height:38px">✕</button>
+        </div>`;
+    }).join('');
+
     let vizContent = '';
     if (!hasResult) {
         vizContent = `<div class="empty-state" style="height:100%;justify-content:center">
@@ -115,21 +133,41 @@ function renderProductionTab(gameData, hasResult) {
     }
 
     return `
-    <div style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:16px;margin-bottom:16px">
-        <div style="margin-bottom:16px;font-size:14px;font-weight:600;color:var(--text-secondary)">Select items you want to produce</div>
-        <div id="planner-target-list">
-            ${targetRows}
-        </div>
-        <div style="display:flex;gap:12px;margin-top:8px">
-            <div class="input-group custom-dropdown-container" style="margin:0;flex:2">
-                <input type="text" id="planner-new-item-search" placeholder="Search or select item..." autocomplete="off" />
-                <div class="custom-dropdown-menu" id="planner-item-menu">
-                    ${dropdownItems}
-                </div>
+    <div style="display:flex;gap:16px;margin-bottom:16px">
+        <div style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:16px;flex:1">
+            <div style="margin-bottom:16px;font-size:14px;font-weight:600;color:var(--text-secondary)">Products (Outputs)</div>
+            <div id="planner-target-list">
+                ${targetRows}
             </div>
-            <button class="btn btn-ghost" id="planner-add-target" style="flex:1;border:1px dashed var(--accent-green);color:var(--accent-green)">+ Add product</button>
+            <div style="display:flex;gap:12px;margin-top:8px">
+                <div class="input-group custom-dropdown-container" style="margin:0;flex:2">
+                    <input type="text" id="planner-new-item-search" placeholder="Search or select item..." autocomplete="off" />
+                    <div class="custom-dropdown-menu" id="planner-item-menu">
+                        ${dropdownItems}
+                    </div>
+                </div>
+                <button class="btn btn-ghost" id="planner-add-target" style="flex:1;border:1px dashed var(--accent-green);color:var(--accent-green)">+ Add Product</button>
+            </div>
+        </div>
+        
+        <div style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:16px;flex:1">
+            <div style="margin-bottom:16px;font-size:14px;font-weight:600;color:var(--text-secondary)">Available Inputs (Globally Sourced)</div>
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">These items will be drawn from your global surplus before being produced.</div>
+            <div id="planner-input-list">
+                ${inputRows}
+            </div>
+            <div style="display:flex;gap:12px;margin-top:8px">
+                <div class="input-group custom-dropdown-container" style="margin:0;flex:2">
+                    <input type="text" id="planner-new-input-search" placeholder="Search or select item..." autocomplete="off" />
+                    <div class="custom-dropdown-menu" id="planner-input-menu">
+                        ${dropdownItems}
+                    </div>
+                </div>
+                <button class="btn btn-ghost" id="planner-add-input" style="flex:1;border:1px dashed var(--accent-blue);color:var(--accent-blue)">+ Add Input</button>
+            </div>
         </div>
     </div>
+    
     <div style="height:850px;position:relative;background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);overflow:hidden">
         ${vizContent}
     </div>`;
@@ -275,6 +313,37 @@ export function initPlanner() {
         });
     }
 
+    // Add Input logic (Dropdown)
+    let selectedInputId = null;
+    const searchInputInput = document.getElementById('planner-new-input-search');
+    const menuInput = document.getElementById('planner-input-menu');
+    
+    if (searchInputInput && menuInput) {
+        searchInputInput.addEventListener('focus', () => menuInput.classList.add('show'));
+        document.addEventListener('click', (e) => {
+            if (!searchInputInput.contains(e.target) && !menuInput.contains(e.target)) {
+                menuInput.classList.remove('show');
+            }
+        });
+        
+        searchInputInput.addEventListener('input', () => {
+            const q = searchInputInput.value.toLowerCase();
+            menuInput.querySelectorAll('.custom-dropdown-item').forEach(item => {
+                const name = item.querySelector('span').textContent.toLowerCase();
+                item.style.display = name.includes(q) ? 'flex' : 'none';
+            });
+            menuInput.classList.add('show');
+        });
+        
+        menuInput.querySelectorAll('.custom-dropdown-item').forEach(item => {
+            item.addEventListener('click', () => {
+                selectedInputId = item.dataset.value;
+                searchInputInput.value = item.querySelector('span').textContent;
+                menuInput.classList.remove('show');
+            });
+        });
+    }
+
     // Add target button
     document.getElementById('planner-add-target')?.addEventListener('click', () => {
         if (!selectedItemId) { showToast('Select an item', 'error'); return; }
@@ -294,6 +363,39 @@ export function initPlanner() {
             plannerState.targets.splice(parseInt(btn.dataset.idx), 1);
             plannerState.result = null;
             rerender();
+        });
+    });
+
+    // Add input button
+    document.getElementById('planner-add-input')?.addEventListener('click', () => {
+        if (!selectedInputId) { showToast('Select an item', 'error'); return; }
+        
+        if (plannerState.inputs.find(i => i.itemId === selectedInputId)) {
+            showToast('Input already added', 'error'); return;
+        }
+        plannerState.inputs.push({ itemId: selectedInputId });
+        plannerState.result = null;
+        rerender();
+    });
+
+    // Remove input
+    document.querySelectorAll('.btn-remove-input').forEach(btn => {
+        btn.addEventListener('click', () => {
+            plannerState.inputs.splice(parseInt(btn.dataset.idx), 1);
+            plannerState.result = null;
+            rerender();
+        });
+    });
+
+    // Update input properties
+    document.querySelectorAll('.input-item-select').forEach(sel => {
+        sel.addEventListener('change', (e) => {
+            const idx = parseInt(e.target.dataset.idx);
+            const val = e.target.value;
+            if (val) {
+                plannerState.inputs[idx].itemId = val;
+                plannerState.result = null;
+            }
         });
     });
 
@@ -327,10 +429,21 @@ export function initPlanner() {
         btn.innerHTML = '<div class="loading-spinner" style="width:14px;height:14px;border-width:2px"></div>';
 
         try {
+            // Compute global surplus for available inputs
+            const { computeGlobalBalance } = await import('../modules/state.js');
+            const globalBalance = computeGlobalBalance();
+            const availableInputs = {};
+            for (const inp of plannerState.inputs) {
+                const b = globalBalance[inp.itemId];
+                if (b && (b.produced - b.consumed) > 0) {
+                    availableInputs[inp.itemId] = b.produced - b.consumed;
+                }
+            }
+
             // Calculate for each target and merge
             let merged = null;
             for (const t of plannerState.targets) {
-                const result = await api.calculate(t.itemId, t.rate, { ...overrides, ...t.recipeOverrides });
+                const result = await api.calculate(t.itemId, t.rate, { ...overrides, ...t.recipeOverrides }, availableInputs);
                 if (!merged) { merged = result; }
                 else {
                     // Merge steps

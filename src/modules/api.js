@@ -38,8 +38,8 @@ export const api = {
         return res.json();
     },
 
-    calculate: (targetItemId, targetRate, recipeOverrides) =>
-        request('/calculate', { method: 'POST', body: JSON.stringify({ targetItemId, targetRate, recipeOverrides }) }),
+    calculate: (targetItemId, targetRate, recipeOverrides, availableInputs) =>
+        request('/calculate', { method: 'POST', body: JSON.stringify({ targetItemId, targetRate, recipeOverrides, availableInputs }) }),
 
     getSettings: () => request('/settings'),
     updateSettings: (data) => request('/settings', { method: 'PUT', body: JSON.stringify(data) })

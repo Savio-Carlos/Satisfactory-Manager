@@ -215,6 +215,62 @@ function buildGraph(result, gameData) {
         tooltipData: { machines: false, inputs: [{ name: targetItem?.name || result.targetItemId, rate: result.targetRate.toFixed(3) }] },
         x: 0, y: 0
     });
+
+    for (const step of result.steps) {
+        const stepNode = stepNodes.get(step.recipeId + '__' + step.targetItemId);
+        if (!stepNode) continue;
+        for (const inp of step.inputs) {
+            const sourceRaw = nodes.find(n => n.id === 'raw__' + inp.itemId);
+            const sourceStep = findStepProducing(inp.itemId, result.steps, stepNodes);
+            const source = sourceStep || sourceRaw;
+            if (source) {
+                const rate = inp.ratePerMachine * step.machineCountRaw;
+                const item = gameData.items[inp.itemId];
+                edges.push({
+                    from: source.id, to: stepNode.id,
+                    label: fmtRate(rate, inp.itemId, gameData),
+                    itemName: item?.name || inp.itemId,
+                    itemImg: item?.image ? getImageUrl(item.image) : null
+                });
+            }
+        }
+        if (step.targetItemId === result.targetItemId) {
+            edges.push({
+                from: stepNode.id, to: 'output__' + result.targetItemId,
+                label: fmtRate(result.targetRate, result.targetItemId, gameData),
+                itemName: targetItem?.name || result.targetItemId,
+                itemImg: targetItem?.image ? getImageUrl(targetItem.image) : null
+            });
+        }
+        for (const out of step.outputs) {
+            if (out.itemId === result.targetItemId) continue;
+            for (const cs of result.steps) {
+                if (cs === step) continue;
+                if (cs.inputs.find(i => i.itemId === out.itemId)) {
+                    const cn = stepNodes.get(cs.recipeId + '__' + cs.targetItemId);
+                    if (cn && !edges.find(e => e.from === stepNode.id && e.to === cn.id && e.itemName === (gameData.items[out.itemId]?.name || out.itemId))) {
+                        const rate = out.ratePerMachine * step.machineCountRaw;
+                        const item = gameData.items[out.itemId];
+                        edges.push({
+                            from: stepNode.id, to: cn.id,
+                            label: fmtRate(rate, out.itemId, gameData),
+                            itemName: item?.name || out.itemId,
+                            itemImg: item?.image ? getImageUrl(item.image) : null
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+function findStepProducing(itemId, steps, stepNodes) {
+    for (const step of steps) {
+        if (step.outputs.some(o => o.itemId === itemId)) {
+            return stepNodes.get(step.recipeId + '__' + step.targetItemId);
+        }
+    }
+    return null;
 }
 
 function layoutGraph() {

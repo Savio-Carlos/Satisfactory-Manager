@@ -203,10 +203,10 @@ app.put('/api/settings', (req, res) => {
 
 // -- Production Calculator --
 app.post('/api/calculate', (req, res) => {
-    const { targetItemId, targetRate, recipeOverrides } = req.body;
+    const { targetItemId, targetRate, recipeOverrides, availableInputs } = req.body;
     
     try {
-        const result = calculateProductionChain(targetItemId, targetRate, recipeOverrides || {}, gameData);
+        const result = calculateProductionChain(targetItemId, targetRate, recipeOverrides || {}, availableInputs || {}, gameData);
         res.json(result);
     } catch (e) {
         console.error('Calculation error:', e);
@@ -215,12 +215,27 @@ app.post('/api/calculate', (req, res) => {
 });
 
 // Production chain calculator
-function calculateProductionChain(targetItemId, targetRate, recipeOverrides, gameData) {
+function calculateProductionChain(targetItemId, targetRate, recipeOverrides, availableInputs, gameData) {
     const steps = {};
     const rawResources = {};
+    const inputsUsed = {}; // track how much of availableInputs was used
 
     function resolve(itemId, rateNeeded, resolveStack = new Set()) {
         if (!rateNeeded || !isFinite(rateNeeded) || rateNeeded <= 0) return;
+
+        // Check if we can satisfy this from availableInputs
+        if (availableInputs[itemId] && availableInputs[itemId] > 0) {
+            const available = availableInputs[itemId];
+            if (rateNeeded <= available) {
+                rawResources[itemId] = (rawResources[itemId] || 0) + rateNeeded;
+                availableInputs[itemId] -= rateNeeded;
+                return;
+            } else {
+                rawResources[itemId] = (rawResources[itemId] || 0) + available;
+                rateNeeded -= available;
+                availableInputs[itemId] = 0;
+            }
+        }
 
         // Circular dependency guard
         if (resolveStack.has(itemId)) {

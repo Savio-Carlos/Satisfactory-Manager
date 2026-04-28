@@ -155,3 +155,43 @@ export function buildingIcon(buildingId, gameData, size = 28) {
     const url = getImageUrl(bld.image);
     return `<img src="${url}" class="item-icon" style="width:${size}px;height:${size}px" alt="${bld.name || ''}" loading="lazy">`;
 }
+
+/**
+ * Compute global balance from user factories and save data
+ */
+export function computeGlobalBalance(customFactories = null, includeSaveData = true) {
+    const { gameData, factories, saveData } = getState();
+    const balance = {};
+    const targetFactories = customFactories || factories;
+
+    for (const factory of targetFactories) {
+        if (includeSaveData && factory.countedInSave && saveData) continue;
+
+        for (const bld of (factory.buildings || [])) {
+            if (!bld.recipeId || !gameData?.recipes[bld.recipeId]) continue;
+            const recipe = gameData.recipes[bld.recipeId];
+            const cyclesPerMin = recipe.manufacturingDuration > 0 ? 60 / recipe.manufacturingDuration : 0;
+            const clock = (bld.clockSpeed || 100) / 100;
+            const count = bld.count || 1;
+
+            for (const ing of recipe.ingredients) {
+                if (!balance[ing.itemId]) balance[ing.itemId] = { produced: 0, consumed: 0 };
+                balance[ing.itemId].consumed += ing.amount * cyclesPerMin * clock * count;
+            }
+            for (const prod of recipe.products) {
+                if (!balance[prod.itemId]) balance[prod.itemId] = { produced: 0, consumed: 0 };
+                balance[prod.itemId].produced += prod.amount * cyclesPerMin * clock * count;
+            }
+        }
+    }
+
+    if (includeSaveData && saveData?.globalBalance) {
+        for (const item of saveData.globalBalance) {
+            if (!balance[item.itemId]) balance[item.itemId] = { produced: 0, consumed: 0 };
+            balance[item.itemId].produced += item.produced;
+            balance[item.itemId].consumed += item.consumed;
+        }
+    }
+
+    return balance;
+}

@@ -1,40 +1,10 @@
-import { getState, fmt, fmtRate, itemIcon, renderProgressBar } from '../modules/state.js';
+import { getState, fmt, fmtRate, itemIcon, renderProgressBar, computeGlobalBalance } from '../modules/state.js';
 
 export function renderDashboard() {
     const { gameData, factories, saveData } = getState();
 
-    // Compute global balance from user factories (skip countedInSave when save data is loaded)
-    const balance = {};
-    for (const factory of factories) {
-        // Skip factories marked as "already counted in save" when save data exists
-        if (factory.countedInSave && saveData) continue;
-
-        for (const bld of (factory.buildings || [])) {
-            if (!bld.recipeId || !gameData?.recipes[bld.recipeId]) continue;
-            const recipe = gameData.recipes[bld.recipeId];
-            const cyclesPerMin = recipe.manufacturingDuration > 0 ? 60 / recipe.manufacturingDuration : 0;
-            const clock = (bld.clockSpeed || 100) / 100;
-            const count = bld.count || 1;
-
-            for (const ing of recipe.ingredients) {
-                if (!balance[ing.itemId]) balance[ing.itemId] = { produced: 0, consumed: 0 };
-                balance[ing.itemId].consumed += ing.amount * cyclesPerMin * clock * count;
-            }
-            for (const prod of recipe.products) {
-                if (!balance[prod.itemId]) balance[prod.itemId] = { produced: 0, consumed: 0 };
-                balance[prod.itemId].produced += prod.amount * cyclesPerMin * clock * count;
-            }
-        }
-    }
-
-    // Merge save data balance
-    if (saveData?.globalBalance) {
-        for (const item of saveData.globalBalance) {
-            if (!balance[item.itemId]) balance[item.itemId] = { produced: 0, consumed: 0 };
-            balance[item.itemId].produced += item.produced;
-            balance[item.itemId].consumed += item.consumed;
-        }
-    }
+    // Compute global balance
+    const balance = computeGlobalBalance();
 
     const balanceList = Object.entries(balance)
         .map(([itemId, b]) => {
