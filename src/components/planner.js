@@ -1,4 +1,4 @@
-import { getState, setState, showToast, fmt, fmtRate, itemIcon, buildingIcon, computeGlobalBalance } from '../modules/state.js';
+import { getState, setState, showToast, fmt, fmtRate, itemIcon, buildingIcon, computeGlobalBalance, RAW_LIMITS } from '../modules/state.js';
 import { api } from '../modules/api.js';
 import { renderFlowchart, initFlowchart } from './flowchart.js';
 import { showAddFactoryModal } from './factories.js';
@@ -8,7 +8,9 @@ let plannerState = {
     inputs: [],           // [{itemId}]
     result: null,
     activeTab: 'production',
-    vizFullscreen: false
+    vizFullscreen: false,
+    mode: 'rate',         // 'rate' | 'max'
+    resourceLimits: null  // { itemId: rate } — populated lazily from RAW_LIMITS
 };
 
 export function renderPlanner() {
@@ -47,6 +49,10 @@ export function renderPlanner() {
                 <p>Design new factories and calculate resource requirements</p>
             </div>
             <div style="display:flex;gap:12px;align-items:center">
+                 <div class="mode-toggle" style="display:flex;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);overflow:hidden">
+                    <button class="mode-toggle-btn ${plannerState.mode === 'rate' ? 'active' : ''}" data-mode="rate" style="padding:8px 14px;font-size:12px;font-weight:600;background:${plannerState.mode === 'rate' ? 'var(--accent-orange)' : 'transparent'};color:${plannerState.mode === 'rate' ? '#fff' : 'var(--text-secondary)'};border:none;cursor:pointer">Set Rate</button>
+                    <button class="mode-toggle-btn ${plannerState.mode === 'max' ? 'active' : ''}" data-mode="max" style="padding:8px 14px;font-size:12px;font-weight:600;background:${plannerState.mode === 'max' ? 'var(--accent-orange)' : 'transparent'};color:${plannerState.mode === 'max' ? '#fff' : 'var(--text-secondary)'};border:none;cursor:pointer">Maximize</button>
+                 </div>
                  <button class="btn btn-secondary" id="add-plan-to-factory" ${!hasResult ? 'disabled' : ''}>Add to Factory</button>
                  <button class="btn btn-primary" id="planner-calc" style="padding:12px 36px;font-size:16px;font-weight:700;height:auto">Calculate</button>
             </div>
@@ -84,8 +90,11 @@ function renderProductionTab(gameData, hasResult) {
         </div>
     `).join('');
 
+    const isMax = plannerState.mode === 'max';
+    const maxRate = plannerState.result?.maxRate;
     const targetRows = plannerState.targets.map((t, idx) => {
         const item = gameData.items[t.itemId];
+        const rateValue = isMax && maxRate ? maxRate.toFixed(2) : t.rate;
         return `<div class="target-row" style="display:flex;gap:12px;margin-bottom:8px;align-items:center">
             <div class="input-group" style="margin:0;flex:2">
                 <div style="display:flex;align-items:center;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:0 8px">
@@ -97,7 +106,7 @@ function renderProductionTab(gameData, hasResult) {
                 </div>
             </div>
             <div class="input-group" style="margin:0;flex:1;max-width:150px">
-                <input type="number" class="target-rate-input" data-idx="${idx}" value="${t.rate}" min="0.1" step="0.1" style="border-radius:var(--radius-sm)" />
+                <input type="number" class="target-rate-input" data-idx="${idx}" value="${rateValue}" min="0.1" step="0.1" ${isMax ? 'disabled' : ''} style="border-radius:var(--radius-sm);${isMax ? 'background:var(--bg-input);color:var(--text-muted)' : ''}" />
             </div>
             <div style="color:var(--text-secondary);font-size:13px;width:60px">items/min</div>
             <button class="btn btn-ghost btn-sm btn-remove-target" data-idx="${idx}" style="color:var(--accent-red);padding:0 12px;height:38px">✕</button>
@@ -105,13 +114,26 @@ function renderProductionTab(gameData, hasResult) {
     }).join('');
 
     const globalBalance = computeGlobalBalance();
+    const renderUsageBar = (rate, produced) => {
+        if (!produced || produced <= 0) {
+            return `<div style="font-size:10px;color:var(--text-muted)">no global production</div>`;
+        }
+        const pct = Math.max(0, (rate / produced) * 100);
+        const visualPct = Math.min(100, pct);
+        const color = pct > 100 ? 'var(--color-deficit)' : (pct > 80 ? 'var(--color-balanced)' : 'var(--color-surplus)');
+        return `<div style="display:flex;align-items:center;gap:6px;margin-top:4px">
+            <div style="flex:1;height:6px;background:var(--bg-input);border-radius:3px;overflow:hidden">
+                <div style="height:100%;width:${visualPct}%;background:${color};transition:width 0.2s"></div>
+            </div>
+            <span style="font-size:10px;color:${color};font-family:var(--font-mono);min-width:42px;text-align:right">${pct < 0.05 ? '0' : pct.toFixed(pct < 10 ? 1 : 0)}%</span>
+        </div>`;
+    };
     const inputRows = plannerState.inputs.map((inp, idx) => {
         const item = gameData.items[inp.itemId];
         const b = globalBalance[inp.itemId];
-        const available = b ? Math.max(0, b.produced - b.consumed) : 0;
-        const overdraw = (inp.rate || 0) > available + 0.001;
-        const availLabel = inp.itemId
-            ? `<div style="font-size:11px;color:${overdraw ? 'var(--accent-red)' : 'var(--text-muted)'};margin-top:2px;font-family:var(--font-mono)">${fmtRate(available, inp.itemId, gameData)} available</div>`
+        const produced = b?.produced || 0;
+        const usageInfo = inp.itemId
+            ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;font-family:var(--font-mono)">Global produced: ${fmtRate(produced, inp.itemId, gameData)}</div>${renderUsageBar(inp.rate || 0, produced)}`
             : '';
         return `<div class="target-row" style="display:flex;gap:12px;margin-bottom:8px;align-items:flex-start">
             <div class="input-group" style="margin:0;flex:2">
@@ -122,7 +144,7 @@ function renderProductionTab(gameData, hasResult) {
                         ${producibleItems.map(i => `<option value="${i.id}" ${i.id === inp.itemId ? 'selected' : ''}>${i.name}</option>`).join('')}
                     </select>
                 </div>
-                ${availLabel}
+                ${usageInfo}
             </div>
             <div class="input-group" style="margin:0;flex:1;max-width:150px">
                 <input type="number" class="input-rate-input" data-idx="${idx}" value="${inp.rate || 0}" min="0.1" step="0.1" style="border-radius:var(--radius-sm)" />
@@ -131,6 +153,75 @@ function renderProductionTab(gameData, hasResult) {
             <button class="btn btn-ghost btn-sm btn-remove-input" data-idx="${idx}" style="color:var(--accent-red);padding:0 12px;height:38px">✕</button>
         </div>`;
     }).join('');
+
+    // Suggestions: ingredients from added products that aren't already inputs.
+    const suggestionMap = new Map(); // itemId → {item, produced}
+    for (const t of plannerState.targets) {
+        if (!t.itemId) continue;
+        const recipeIds = gameData.itemRecipeMap[t.itemId] || [];
+        const recipeId = recipeIds.find(rId => {
+            const r = gameData.recipes[rId];
+            return !r.isAlternate && r.products[0]?.itemId === t.itemId;
+        }) || recipeIds.find(rId => !gameData.recipes[rId].isAlternate) || recipeIds[0];
+        if (!recipeId) continue;
+        const recipe = gameData.recipes[recipeId];
+        if (!recipe?.ingredients) continue;
+        for (const ing of recipe.ingredients) {
+            if (suggestionMap.has(ing.itemId)) continue;
+            if (plannerState.inputs.some(i => i.itemId === ing.itemId)) continue;
+            const b = globalBalance[ing.itemId];
+            suggestionMap.set(ing.itemId, { produced: b?.produced || 0 });
+        }
+    }
+    const suggestionRows = Array.from(suggestionMap.entries()).map(([itemId, info]) => {
+        const item = gameData.items[itemId];
+        const hasProduction = info.produced > 0.001;
+        return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);margin-bottom:6px">
+            ${itemIcon(itemId, gameData, 18, 'item-icon-sm')}
+            <span style="flex:1;font-size:12px">${item?.name || itemId}</span>
+            <span style="font-size:11px;color:${hasProduction ? 'var(--color-surplus)' : 'var(--text-muted)'};font-family:var(--font-mono)">${fmtRate(info.produced, itemId, gameData)}</span>
+            <button class="btn btn-ghost btn-sm suggestion-add-btn" data-item="${itemId}" data-produced="${info.produced}" style="padding:2px 8px;font-size:11px;height:22px;color:var(--accent-blue);border:1px solid var(--accent-blue)">+ Add</button>
+        </div>`;
+    }).join('');
+    const suggestionsHtml = suggestionRows
+        ? `<div style="margin-top:14px;padding-top:12px;border-top:1px dashed var(--border-color)">
+            <div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:0.05em">Suggested from Products</div>
+            ${suggestionRows}
+           </div>`
+        : '';
+
+    // Resource Limits panel (only visible in maximize mode).
+    if (!plannerState.resourceLimits) {
+        plannerState.resourceLimits = {};
+        for (const [itemId, limit] of Object.entries(RAW_LIMITS)) {
+            if (isFinite(limit)) plannerState.resourceLimits[itemId] = limit;
+        }
+    }
+    const limitRows = Object.entries(RAW_LIMITS)
+        .filter(([, lim]) => isFinite(lim))
+        .map(([itemId, mapLimit]) => {
+            const item = gameData.items[itemId];
+            const current = plannerState.resourceLimits[itemId] ?? mapLimit;
+            return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                ${itemIcon(itemId, gameData, 18, 'item-icon-sm')}
+                <span style="flex:1;font-size:12px">${item?.name || itemId}</span>
+                <input type="number" class="resource-limit-input" data-item="${itemId}" value="${current}" min="0" step="100" style="width:90px;padding:4px 6px;font-size:12px;font-family:var(--font-mono);text-align:right;background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);color:var(--text-primary)" />
+                <button class="btn btn-ghost btn-sm reset-limit-btn" data-item="${itemId}" data-default="${mapLimit}" title="Reset to map default" style="padding:2px 6px;font-size:10px;height:22px">Reset</button>
+            </div>`;
+        }).join('');
+    const resourceLimitsHtml = isMax ? `
+        <div style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:16px;margin-bottom:16px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                <div style="font-size:14px;font-weight:600;color:var(--text-secondary)">Resource Limits (items/min)</div>
+                <button class="btn btn-ghost btn-sm" id="reset-all-limits" style="font-size:11px;padding:4px 10px">Reset all</button>
+            </div>
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Maximize will find the highest equal rate for all targets that doesn't exceed any of these raw resource limits.</div>
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px 24px">${limitRows}</div>
+        </div>
+    ` : '';
+    const maxResultBanner = (isMax && maxRate)
+        ? `<div style="background:var(--accent-orange);color:#fff;padding:10px 16px;border-radius:var(--radius-md);margin-bottom:16px;font-weight:600;font-size:14px">Maximum achievable: ${maxRate.toFixed(2)} items/min for each target</div>`
+        : '';
 
     let vizContent = '';
     if (!hasResult) {
@@ -147,6 +238,8 @@ function renderProductionTab(gameData, hasResult) {
     }
 
     return `
+    ${maxResultBanner}
+    ${resourceLimitsHtml}
     <div style="display:flex;gap:16px;margin-bottom:16px">
         <div style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:16px;flex:1">
             <div style="margin-bottom:16px;font-size:14px;font-weight:600;color:var(--text-secondary)">Products (Outputs)</div>
@@ -162,7 +255,6 @@ function renderProductionTab(gameData, hasResult) {
                 </div>
                 <button class="btn btn-ghost" id="planner-add-target" style="flex:1;border:1px dashed var(--accent-green);color:var(--accent-green)">+ Add Product</button>
             </div>
-            <div id="product-ingredients-preview" style="margin-top:8px"></div>
         </div>
         
         <div style="background:var(--bg-card);border:1px solid var(--border-color);border-radius:var(--radius-md);padding:16px;flex:1">
@@ -180,6 +272,7 @@ function renderProductionTab(gameData, hasResult) {
                 </div>
                 <button class="btn btn-ghost" id="planner-add-input" style="flex:1;border:1px dashed var(--accent-blue);color:var(--accent-blue)">+ Add Input</button>
             </div>
+            ${suggestionsHtml}
         </div>
     </div>
     
@@ -297,7 +390,46 @@ function renderItemsTab(result, gameData, hasResult) {
 
 export function initPlanner() {
     let selectedItemId = null;
-    
+
+    // Mode toggle (Set Rate / Maximize)
+    document.querySelectorAll('.mode-toggle-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const mode = btn.dataset.mode;
+            if (mode === plannerState.mode) return;
+            plannerState.mode = mode;
+            plannerState.result = null;
+            rerender();
+        });
+    });
+
+    // Resource Limits inputs
+    document.querySelectorAll('.resource-limit-input').forEach(input => {
+        input.addEventListener('change', (e) => {
+            const itemId = e.target.dataset.item;
+            const val = parseFloat(e.target.value);
+            if (isFinite(val) && val >= 0) {
+                plannerState.resourceLimits[itemId] = val;
+            }
+        });
+    });
+    document.querySelectorAll('.reset-limit-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const itemId = btn.dataset.item;
+            const def = parseFloat(btn.dataset.default);
+            if (isFinite(def)) {
+                plannerState.resourceLimits[itemId] = def;
+                rerender();
+            }
+        });
+    });
+    document.getElementById('reset-all-limits')?.addEventListener('click', () => {
+        plannerState.resourceLimits = {};
+        for (const [itemId, limit] of Object.entries(RAW_LIMITS)) {
+            if (isFinite(limit)) plannerState.resourceLimits[itemId] = limit;
+        }
+        rerender();
+    });
+
     // Custom Dropdown logic
     const searchInput = document.getElementById('planner-new-item-search');
     const menu = document.getElementById('planner-item-menu');
@@ -324,80 +456,21 @@ export function initPlanner() {
                 selectedItemId = item.dataset.value;
                 searchInput.value = item.querySelector('span').textContent;
                 menu.classList.remove('show');
-                updateIngredientPreview(selectedItemId);
-            });
-        });
-
-        searchInput.addEventListener('input', () => {
-            if (!searchInput.value.trim()) updateIngredientPreview(null);
-        });
-    }
-
-    function updateIngredientPreview(itemId) {
-        const preview = document.getElementById('product-ingredients-preview');
-        if (!preview) return;
-        if (!itemId) { preview.innerHTML = ''; return; }
-
-        const { gameData } = getState();
-        const availableRecipes = gameData.itemRecipeMap[itemId] || [];
-        const recipeId = availableRecipes.find(rId => {
-            const r = gameData.recipes[rId];
-            return !r.isAlternate && r.products[0]?.itemId === itemId;
-        }) || availableRecipes.find(rId => !gameData.recipes[rId].isAlternate) || availableRecipes[0];
-
-        if (!recipeId) { preview.innerHTML = ''; return; }
-        const recipe = gameData.recipes[recipeId];
-        if (!recipe || !recipe.manufacturingDuration || !recipe.ingredients?.length) { preview.innerHTML = ''; return; }
-
-        const targetProduct = recipe.products.find(p => p.itemId === itemId);
-        if (!targetProduct || !targetProduct.amount) { preview.innerHTML = ''; return; }
-
-        const cyclesPerMin = 60 / recipe.manufacturingDuration;
-        const outputPerMin = targetProduct.amount * cyclesPerMin;
-        const balance = computeGlobalBalance();
-
-        const rows = recipe.ingredients.map(ing => {
-            const item = gameData.items[ing.itemId];
-            const unitRate = (ing.amount * cyclesPerMin) / outputPerMin; // per 1 target/min
-            const b = balance[ing.itemId];
-            const surplus = b ? Math.max(0, b.produced - b.consumed) : 0;
-            const alreadyAdded = plannerState.inputs.some(i => i.itemId === ing.itemId);
-
-            const surplusLabel = surplus > 0.001
-                ? `<span style="font-size:10px;color:var(--color-surplus);font-family:var(--font-mono)">${fmtRate(surplus, ing.itemId, gameData)} avail</span>`
-                : `<span style="font-size:10px;color:var(--text-muted)">no surplus</span>`;
-
-            const addBtn = surplus > 0.001 && !alreadyAdded
-                ? `<button class="btn btn-ghost btn-sm preview-add-input" data-item="${ing.itemId}" data-surplus="${surplus}" style="padding:2px 8px;font-size:11px;height:22px;color:var(--accent-blue);border:1px solid var(--accent-blue)">+ Add</button>`
-                : alreadyAdded
-                    ? `<span style="font-size:10px;color:var(--text-muted)">added</span>`
-                    : '';
-
-            return `<div style="display:flex;align-items:center;gap:8px;padding:4px 0;border-bottom:1px solid var(--border-color)">
-                ${itemIcon(ing.itemId, gameData, 18, 'item-icon-sm')}
-                <span style="flex:1;font-size:12px">${item?.name || ing.itemId}</span>
-                <span style="font-size:11px;color:var(--text-muted);font-family:var(--font-mono)">${fmtRate(unitRate, ing.itemId, gameData)}/unit</span>
-                ${surplusLabel}
-                ${addBtn}
-            </div>`;
-        }).join('');
-
-        preview.innerHTML = `<div style="background:var(--bg-input);border:1px solid var(--border-color);border-radius:var(--radius-sm);padding:8px 10px">
-            <div style="font-size:11px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Recipe Ingredients (per 1/min)</div>
-            ${rows}
-        </div>`;
-
-        preview.querySelectorAll('.preview-add-input').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const ingItemId = btn.dataset.item;
-                const surplus = parseFloat(btn.dataset.surplus) || 0;
-                if (plannerState.inputs.find(i => i.itemId === ingItemId)) return;
-                plannerState.inputs.push({ itemId: ingItemId, rate: surplus > 0 ? surplus : 10 });
-                plannerState.result = null;
-                rerender();
             });
         });
     }
+
+    // Suggestion add buttons (ingredients of added products)
+    document.querySelectorAll('.suggestion-add-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const itemId = btn.dataset.item;
+            const produced = parseFloat(btn.dataset.produced) || 0;
+            if (plannerState.inputs.find(i => i.itemId === itemId)) return;
+            plannerState.inputs.push({ itemId, rate: produced > 0 ? produced : 10 });
+            plannerState.result = null;
+            rerender();
+        });
+    });
 
     // Add Input logic (Dropdown)
     let selectedInputId = null;
@@ -487,6 +560,7 @@ export function initPlanner() {
             if (val) {
                 plannerState.inputs[idx].itemId = val;
                 plannerState.result = null;
+                rerender();
             }
         });
     });
@@ -497,6 +571,7 @@ export function initPlanner() {
             const val = parseFloat(e.target.value);
             if (val > 0) {
                 plannerState.inputs[idx].rate = val;
+                rerender();
             }
         });
     });
@@ -536,6 +611,23 @@ export function initPlanner() {
                 if (inp.rate > 0) {
                     availableInputs[inp.itemId] = inp.rate;
                 }
+            }
+
+            // Maximize mode: ask server for the highest equal rate that fits resource limits.
+            if (plannerState.mode === 'max') {
+                const targetItemIds = plannerState.targets.map(t => t.itemId).filter(Boolean);
+                if (targetItemIds.length === 0) { showToast('Add at least one item', 'error'); btn.textContent = 'Calculate'; return; }
+                const resourceLimits = { ...plannerState.resourceLimits };
+                const result = await api.calculateMax(targetItemIds, overrides, availableInputs, resourceLimits);
+                if (result) {
+                    result.targets = targetItemIds.map(id => ({ itemId: id, rate: result.maxRate || 0 }));
+                    plannerState.result = result;
+                    // Update target rates to reflect the maximized rate
+                    for (const t of plannerState.targets) t.rate = result.maxRate || t.rate;
+                }
+                plannerState.activeTab = 'production';
+                rerender();
+                return;
             }
 
             // Calculate for each target and merge.

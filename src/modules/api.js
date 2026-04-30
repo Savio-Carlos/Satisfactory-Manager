@@ -41,6 +41,9 @@ export const api = {
     calculate: (targetItemId, targetRate, recipeOverrides, availableInputs) =>
         request('/calculate', { method: 'POST', body: JSON.stringify({ targetItemId, targetRate, recipeOverrides, availableInputs }) }),
 
+    calculateMax: (targetItemIds, recipeOverrides, availableInputs, resourceLimits) =>
+        request('/calculate-max', { method: 'POST', body: JSON.stringify({ targetItemIds, recipeOverrides, availableInputs, resourceLimits }) }),
+
     getSettings: () => request('/settings'),
     updateSettings: (data) => request('/settings', { method: 'PUT', body: JSON.stringify(data) }),
 

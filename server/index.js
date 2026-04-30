@@ -224,13 +224,96 @@ app.put('/api/settings', (req, res) => {
 // -- Production Calculator --
 app.post('/api/calculate', (req, res) => {
     const { targetItemId, targetRate, recipeOverrides, availableInputs } = req.body;
-    
+
     try {
         const result = calculateProductionChain(targetItemId, targetRate, recipeOverrides || {}, availableInputs || {}, gameData);
         res.json(result);
     } catch (e) {
         console.error('Calculation error:', e);
         res.status(500).json({ error: 'Calculation failed: ' + e.message });
+    }
+});
+
+// -- Maximize Production: binary-search for highest equal rate that fits the resource limits --
+app.post('/api/calculate-max', (req, res) => {
+    const { targetItemIds, recipeOverrides, availableInputs, resourceLimits } = req.body;
+    if (!Array.isArray(targetItemIds) || targetItemIds.length === 0) {
+        return res.status(400).json({ error: 'targetItemIds must be a non-empty array' });
+    }
+
+    const limits = resourceLimits || {};
+    const overrides = recipeOverrides || {};
+
+    function combinedRawAt(rate) {
+        const totals = {};
+        for (const itemId of targetItemIds) {
+            // Pass a fresh availableInputs copy so each call starts from the same pool.
+            const inputsCopy = { ...(availableInputs || {}) };
+            const r = calculateProductionChain(itemId, rate, overrides, inputsCopy, gameData);
+            for (const [k, v] of Object.entries(r.rawResources || {})) {
+                totals[k] = (totals[k] || 0) + v;
+            }
+        }
+        return totals;
+    }
+
+    function fits(totals) {
+        for (const [itemId, used] of Object.entries(totals)) {
+            const lim = limits[itemId];
+            if (lim !== undefined && isFinite(lim) && used > lim + 1e-6) return false;
+        }
+        return true;
+    }
+
+    try {
+        // Binary search for max rate
+        let lo = 0;
+        let hi = 100000;
+        // Find an upper bound that doesn't fit (or confirm hi is enough)
+        for (let i = 0; i < 25; i++) {
+            const mid = (lo + hi) / 2;
+            const totals = combinedRawAt(mid);
+            if (fits(totals)) lo = mid; else hi = mid;
+        }
+        const maxRate = lo;
+        if (maxRate <= 0) {
+            return res.json({ steps: [], rawResources: {}, totalPower: 0, totalMachines: 0, maxRate: 0, targets: targetItemIds.map(id => ({ itemId: id, rate: 0 })) });
+        }
+
+        // Build the merged result at maxRate (similar to client-side merge)
+        let merged = null;
+        const inputsRemaining = { ...(availableInputs || {}) };
+        for (const itemId of targetItemIds) {
+            const r = calculateProductionChain(itemId, maxRate, overrides, { ...inputsRemaining }, gameData);
+            for (const k of Object.keys(inputsRemaining)) {
+                const used = r.rawResources?.[k] || 0;
+                inputsRemaining[k] = Math.max(0, inputsRemaining[k] - used);
+            }
+            if (!merged) {
+                merged = r;
+            } else {
+                for (const step of r.steps) {
+                    const existing = merged.steps.find(s => s.recipeId === step.recipeId && s.targetItemId === step.targetItemId);
+                    if (existing) {
+                        existing.machineCountRaw += step.machineCountRaw;
+                        existing.machineCount = Math.ceil(existing.machineCountRaw);
+                    } else {
+                        merged.steps.push(step);
+                    }
+                }
+                for (const [k, v] of Object.entries(r.rawResources)) {
+                    merged.rawResources[k] = (merged.rawResources[k] || 0) + v;
+                }
+                merged.totalPower += r.totalPower;
+                merged.totalMachines = merged.steps.reduce((s, x) => s + x.machineCount, 0);
+            }
+        }
+        merged.maxRate = maxRate;
+        merged.targets = targetItemIds.map(id => ({ itemId: id, rate: maxRate }));
+        res.json(merged);
+    } catch (e) {
+        console.error('Max calculation error:', e);
+        res.status(500).json({ error: 'Max calculation failed: ' + e.message });
     }
 });
 

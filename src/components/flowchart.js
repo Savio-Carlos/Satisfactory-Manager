@@ -289,23 +289,54 @@ function buildGraph(result, gameData) {
         });
     }
 
+    // Pre-compute byproduct allocations: for each (consumer, item) pair, how
+    // much of the demand is satisfied by byproducts vs. the primary producer.
+    // Byproduct rate is allocated proportionally across consumers by demand.
+    const byAllocation = {}; // {consumerStepKey: {itemId: rate}}
+    for (const producer of result.steps) {
+        for (const out of producer.outputs) {
+            if (out.itemId === producer.targetItemId) continue; // primary, not byproduct
+            const byRate = out.ratePerMachine * producer.machineCountRaw;
+            if (byRate < 1e-6) continue;
+            const consumers = result.steps.filter(cs => cs !== producer && cs.inputs.find(i => i.itemId === out.itemId));
+            if (consumers.length === 0) continue;
+            let totalDemand = 0;
+            for (const cs of consumers) {
+                const inp = cs.inputs.find(i => i.itemId === out.itemId);
+                totalDemand += inp.ratePerMachine * cs.machineCountRaw;
+            }
+            if (totalDemand <= 0) continue;
+            for (const cs of consumers) {
+                const inp = cs.inputs.find(i => i.itemId === out.itemId);
+                const csDemand = inp.ratePerMachine * cs.machineCountRaw;
+                const allocated = Math.min(csDemand, byRate * (csDemand / totalDemand));
+                const key = cs.recipeId + '__' + cs.targetItemId;
+                if (!byAllocation[key]) byAllocation[key] = {};
+                byAllocation[key][out.itemId] = (byAllocation[key][out.itemId] || 0) + allocated;
+            }
+        }
+    }
+
     for (const step of result.steps) {
         const stepNode = stepNodes.get(step.recipeId + '__' + step.targetItemId);
         if (!stepNode) continue;
+        const stepKey = step.recipeId + '__' + step.targetItemId;
         for (const inp of step.inputs) {
             const sourceRaw = nodes.find(n => n.id === 'raw__' + inp.itemId);
             const sourceStep = findStepProducing(inp.itemId, result.steps, stepNodes);
             const source = sourceStep || sourceRaw;
-            if (source) {
-                const rate = inp.ratePerMachine * step.machineCountRaw;
-                const item = gameData.items[inp.itemId];
-                edges.push({
-                    from: source.id, to: stepNode.id,
-                    label: fmtRate(rate, inp.itemId, gameData),
-                    itemName: item?.name || inp.itemId,
-                    itemImg: item?.image ? getImageUrl(item.image) : null
-                });
-            }
+            if (!source) continue;
+            const fullDemand = inp.ratePerMachine * step.machineCountRaw;
+            const byRate = byAllocation[stepKey]?.[inp.itemId] || 0;
+            const rate = Math.max(0, fullDemand - byRate);
+            if (rate < 0.001) continue; // entire demand satisfied by byproduct edge
+            const item = gameData.items[inp.itemId];
+            edges.push({
+                from: source.id, to: stepNode.id,
+                label: fmtRate(rate, inp.itemId, gameData),
+                itemName: item?.name || inp.itemId,
+                itemImg: item?.image ? getImageUrl(item.image) : null
+            });
         }
         if (targetMap.has(step.targetItemId)) {
             const rate = targetMap.get(step.targetItemId);
@@ -319,23 +350,25 @@ function buildGraph(result, gameData) {
                 });
             }
         }
+        // Byproduct edges: only for non-primary outputs (true byproducts).
         for (const out of step.outputs) {
+            if (out.itemId === step.targetItemId) continue; // primary, handled by input loop
             if (targetMap.has(out.itemId)) continue;
             for (const cs of result.steps) {
                 if (cs === step) continue;
-                if (cs.inputs.find(i => i.itemId === out.itemId)) {
-                    const cn = stepNodes.get(cs.recipeId + '__' + cs.targetItemId);
-                    if (cn && !edges.find(e => e.from === stepNode.id && e.to === cn.id && e.itemName === (gameData.items[out.itemId]?.name || out.itemId))) {
-                        const rate = out.ratePerMachine * step.machineCountRaw;
-                        const item = gameData.items[out.itemId];
-                        edges.push({
-                            from: stepNode.id, to: cn.id,
-                            label: fmtRate(rate, out.itemId, gameData),
-                            itemName: item?.name || out.itemId,
-                            itemImg: item?.image ? getImageUrl(item.image) : null
-                        });
-                    }
-                }
+                if (!cs.inputs.find(i => i.itemId === out.itemId)) continue;
+                const cn = stepNodes.get(cs.recipeId + '__' + cs.targetItemId);
+                if (!cn) continue;
+                const csKey = cs.recipeId + '__' + cs.targetItemId;
+                const allocated = byAllocation[csKey]?.[out.itemId] || 0;
+                if (allocated < 0.001) continue;
+                const item = gameData.items[out.itemId];
+                edges.push({
+                    from: stepNode.id, to: cn.id,
+                    label: fmtRate(allocated, out.itemId, gameData),
+                    itemName: item?.name || out.itemId,
+                    itemImg: item?.image ? getImageUrl(item.image) : null
+                });
             }
         }
     }
@@ -445,17 +478,17 @@ function draw(ctx, canvas, dpr, gameData) {
         const toC = nodeCenter(toNode);
         const p1 = attachPoint(fromNode, exitSide, toC);
         const p2 = attachPoint(toNode, enterSide, fromC);
+        const isCycle = biDirectional.has(edge.from + '→' + edge.to);
 
-        // Control distance scales with edge length so cycles get a fuller curve.
-        const dist = Math.min(180, Math.max(60, Math.hypot(p2.x - p1.x, p2.y - p1.y) * 0.45));
-        const o1 = sideNormal(exitSide, dist);
-        const o2 = sideNormal(enterSide, dist);
-        const c1 = { x: p1.x + o1.x, y: p1.y + o1.y };
-        const c2 = { x: p2.x + o2.x, y: p2.y + o2.y };
-
-        // For bidirectional pairs, shift both curves perpendicular to the
-        // connection direction so the two arrows are visually separate.
-        if (biDirectional.has(edge.from + '→' + edge.to)) {
+        // Forward edges: straight diagonal lines. Cycles: cubic bezier so the
+        // two arrows in a bidirectional pair don't overlap.
+        let c1, c2;
+        if (isCycle) {
+            const dist = Math.min(180, Math.max(60, Math.hypot(p2.x - p1.x, p2.y - p1.y) * 0.45));
+            const o1 = sideNormal(exitSide, dist);
+            const o2 = sideNormal(enterSide, dist);
+            c1 = { x: p1.x + o1.x, y: p1.y + o1.y };
+            c2 = { x: p2.x + o2.x, y: p2.y + o2.y };
             const OFFSET = 20;
             const dx = toC.x - fromC.x;
             const dy = toC.y - fromC.y;
@@ -470,21 +503,30 @@ function draw(ctx, canvas, dpr, gameData) {
 
         ctx.beginPath();
         ctx.moveTo(p1.x, p1.y);
-        ctx.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, p2.x, p2.y);
+        if (isCycle) {
+            ctx.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, p2.x, p2.y);
+        } else {
+            ctx.lineTo(p2.x, p2.y);
+        }
         ctx.strokeStyle = COLORS.edge;
         ctx.lineWidth = 1.5;
         ctx.stroke();
 
         // Arrow at target endpoint, oriented along edge tangent at the end.
-        const tanX = p2.x - c2.x;
-        const tanY = p2.y - c2.y;
+        const tanX = isCycle ? (p2.x - c2.x) : (p2.x - p1.x);
+        const tanY = isCycle ? (p2.y - c2.y) : (p2.y - p1.y);
         drawArrow(ctx, p2.x, p2.y, tanX, tanY);
 
-        // Label position: bezier midpoint at t=0.5
-        const t = 0.5;
-        const mt = 1 - t;
-        const midX = mt*mt*mt*p1.x + 3*mt*mt*t*c1.x + 3*mt*t*t*c2.x + t*t*t*p2.x;
-        const midY = mt*mt*mt*p1.y + 3*mt*mt*t*c1.y + 3*mt*t*t*c2.y + t*t*t*p2.y;
+        // Label position: midpoint of curve (cycles) or straight line (forward)
+        let midX, midY;
+        if (isCycle) {
+            const t = 0.5, mt = 1 - t;
+            midX = mt*mt*mt*p1.x + 3*mt*mt*t*c1.x + 3*mt*t*t*c2.x + t*t*t*p2.x;
+            midY = mt*mt*mt*p1.y + 3*mt*mt*t*c1.y + 3*mt*t*t*c2.y + t*t*t*p2.y;
+        } else {
+            midX = (p1.x + p2.x) / 2;
+            midY = (p1.y + p2.y) / 2;
+        }
 
         // Edge label with item icon
         if (edge.itemImg) {
